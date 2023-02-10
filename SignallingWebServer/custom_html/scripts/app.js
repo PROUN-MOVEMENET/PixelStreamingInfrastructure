@@ -583,9 +583,6 @@ function onProtocolMessage(data) {
         // Once the protocol has been received, we can send our control messages
         requestInitialSettings();
         requestQualityControl();
-        emitUIInteraction({
-            location: searchParams.get(UrlParams.LOCATION),
-        });
     } catch (e) {
         console.log(e);
     }
@@ -1469,6 +1466,17 @@ function setupWebRtcPlayer(htmlElement, config) {
                 resizePlayerStyle();
                 playStream();
             }
+
+            // PROUN CHAGES //
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get("location")) {
+                setTimeout(() => {
+                    emitUIInteraction({
+                        location: urlParams.get("location"),
+                    });
+                }, 2000);
+            }
+            // PROUN CHAGES END//
         }
     };
 
