@@ -218,7 +218,11 @@ if(config.EnableWebserver) {
 	//Setup folders
 	app.use(express.static(path.join(__dirname, '/Public')))
 	app.use('/images', express.static(path.join(__dirname, './images')))
-	app.use('/scripts', [isAuthenticated('/login'),express.static(path.join(__dirname, '/scripts'))]);
+	// app.use('/scripts', [isAuthenticated('/login'),express.static(path.join(__dirname, '/scripts'))]);
+  app.use("/scripts", [
+    isAuthenticated("/login"),
+    express.static(path.join(__dirname, "/custom_html/scripts")),
+  ]); // PROUN CHANGE //
 	app.use('/', [isAuthenticated('/login'), express.static(path.join(__dirname, '/custom_html'))])
 }
 
