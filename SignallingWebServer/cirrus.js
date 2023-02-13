@@ -633,7 +633,7 @@ playerServer.on('connection', function (ws, req) {
 
 	ws.send(JSON.stringify(clientConfig));
 
-	sendMessageToController({ type: "playerConnected", playerId: playerId, dataChannel: true, sfu: false, location: "surprise!!" }, skipSFU, skipStreamer);
+	sendMessageToController({ type: "playerConnected", playerId: playerId, dataChannel: true, sfu: false, location: urlParams.has('location') ? urlParams.get('location') : 'main' }, skipSFU, skipStreamer);
 	sendPlayersCount();
 });
 
