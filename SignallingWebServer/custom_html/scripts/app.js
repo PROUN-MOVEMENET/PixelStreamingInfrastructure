@@ -1077,7 +1077,7 @@ function showConnectOverlay() {
 				<path fill="white" d="M26.4,90h45.2C81.2,90,89,82.2,89,72.6V27.4C89,17.8,81.2,10,71.6,10H26.4C16.8,10,9,17.8,9,27.4v45.2   C9,82.2,16.8,90,26.4,90z M34,34.7c0-3.6,3.8-5.9,6.9-4L66.7,46c3,1.8,3,6.3,0,8.1L40.9,69.3c-3.1,1.8-6.9-0.4-6.9-4V34.7z"/>
 			</g>
 		</svg>
-	`;
+	`; // PROUN CHANGE
 
     setOverlay("clickableState", startText, (event) => {
         connect();
