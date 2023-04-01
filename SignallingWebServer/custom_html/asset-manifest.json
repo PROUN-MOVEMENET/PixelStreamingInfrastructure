@@ -1,20 +1,20 @@
 {
   "files": {
-    "main.css": "/static/css/main.170f08fa.css",
-    "main.js": "/static/js/main.92201039.js",
+    "main.css": "/static/css/main.db98c779.css",
+    "main.js": "/static/js/main.4e840e96.js",
     "static/media/play-background.jpg": "/static/media/play-background.26565c1265d6332b94f2.jpg",
-    "static/media/unreal.svg": "/static/media/unreal.25bc8aec24bb105d3a53f0eaf716c5b3.svg",
-    "static/media/settings.svg": "/static/media/settings.8ed774efac620acb05d5abbca11f15a3.svg",
-    "static/media/maximize.svg": "/static/media/maximize.206ef31dc767849f12ee40f47f9342cd.svg",
-    "static/media/minimize.svg": "/static/media/minimize.1438a485334f26dba075e14c2e29417d.svg",
-    "static/media/connection-strength.svg": "/static/media/connection-strength.9028b6365f615213a1b08e41974c2f2b.svg",
-    "static/media/info.svg": "/static/media/info.296b933837286250dc6ebc00528c89f0.svg",
+    "static/media/unreal.svg": "/static/media/unreal.d46304d42b7da9acb41d0bd76dcdd5a8.svg",
+    "static/media/settings.svg": "/static/media/settings.c55135b4256bc25d8ef7889d6f5dcb0c.svg",
+    "static/media/maximize.svg": "/static/media/maximize.e66bd360ae98d75351249dc438cb21d9.svg",
+    "static/media/minimize.svg": "/static/media/minimize.00f6ec5dac0b7c9b6393e00ab8ae8570.svg",
+    "static/media/connection-strength.svg": "/static/media/connection-strength.c141dc01ce4f1969b567827ee6847031.svg",
+    "static/media/info.svg": "/static/media/info.47e0d2f34c5c20bfaafc3c3ddbb6434f.svg",
     "index.html": "/index.html",
-    "main.170f08fa.css.map": "/static/css/main.170f08fa.css.map",
-    "main.92201039.js.map": "/static/js/main.92201039.js.map"
+    "main.db98c779.css.map": "/static/css/main.db98c779.css.map",
+    "main.4e840e96.js.map": "/static/js/main.4e840e96.js.map"
   },
   "entrypoints": [
-    "static/css/main.170f08fa.css",
-    "static/js/main.92201039.js"
+    "static/css/main.db98c779.css",
+    "static/js/main.4e840e96.js"
   ]
 }

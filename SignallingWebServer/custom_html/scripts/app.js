@@ -2799,8 +2799,8 @@ function connect() {
     const connectionUrl = window.location.href
         .replace("3000", "80") // PROUN CHANGE //
         .replace("http://", "ws://")
-        .replace("https://", "wss://")
-        // .replace("localhost", "journey.proun.am");
+        .replace("https://", "wss://");
+    // .replace("localhost", "journey.proun.am");
     console.log(`Creating a websocket connection to: ${connectionUrl}`);
     ws = new WebSocket(connectionUrl);
     ws.attemptStreamReconnection = true;
