@@ -1,6 +1,6 @@
 {
 	"UseFrontend": false,
-	"UseMatchmaker": true,
+	"UseMatchmaker": false,
 	"UseHTTPS": false,
 	"UseAuthentication": false,
 	"LogToFile": true,
