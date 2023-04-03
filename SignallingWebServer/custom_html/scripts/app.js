@@ -1070,14 +1070,14 @@ function setOverlay(htmlClass, htmlElement, onClickFunction) {
 function showConnectOverlay() {
     const startText = document.createElement("div");
     startText.id = "playButton";
+    
+    // PROUN CHANGE
     // startText.innerHTML = "Click to start".toUpperCase();
-    startText.innerHTML = `
-		<svg id="playButton-image" x="0px" y="0px" viewBox="0 0 100 100" style="enable-background:new 0 0 100 100;">
-			<g>
-				<path fill="white" d="M26.4,90h45.2C81.2,90,89,82.2,89,72.6V27.4C89,17.8,81.2,10,71.6,10H26.4C16.8,10,9,17.8,9,27.4v45.2   C9,82.2,16.8,90,26.4,90z M34,34.7c0-3.6,3.8-5.9,6.9-4L66.7,46c3,1.8,3,6.3,0,8.1L40.9,69.3c-3.1,1.8-6.9-0.4-6.9-4V34.7z"/>
-			</g>
-		</svg>
-	`; // PROUN CHANGE
+    const playImg = document.createElement("img");
+    playImg.src = "/images/play.svg"
+    startText.appendChild(playImg)
+    // PROUN CHANGE
+    
 
     setOverlay("clickableState", startText, (event) => {
         connect();
@@ -1134,8 +1134,11 @@ function playVideo() {
 function showPlayOverlay() {
     const img = document.createElement("img");
     img.id = "playButton";
-    // img.src = "/images/Play.png";
-    img.src = "/images/custom-play.svg";
+
+    // PROUN CHANGE
+    img.src = "/images/play.svg";
+    // PROUN CHANGE
+
     img.alt = "Start Streaming";
     setOverlay("clickableState", img, (event) => {
         playStream();
@@ -2799,8 +2802,9 @@ function connect() {
     const connectionUrl = window.location.href
         .replace("3000", "80") // PROUN CHANGE //
         .replace("http://", "ws://")
-        .replace("https://", "wss://");
-    // .replace("localhost", "journey.proun.am");
+        .replace("https://", "wss://")
+        .replace("localhost", "journey.proun.am")
+        .replace("192.168.1.22", "journey.proun.am");
     console.log(`Creating a websocket connection to: ${connectionUrl}`);
     ws = new WebSocket(connectionUrl);
     ws.attemptStreamReconnection = true;
