@@ -1,5 +1,5 @@
 {
-	"HttpPort": 90,
+	"HttpPort": 80,
 	"UseHTTPS": false,
 	"MatchmakerPort": 9999,
 	"LogToFile": true

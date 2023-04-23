@@ -89,7 +89,7 @@ if (config.UseHTTPS) {
 // No servers are available so send some simple JavaScript to the client to make
 // it retry after a short period of time.
 function sendRetryResponse(res) {
-	res.send(`All ${cirrusServers.size} Cirrus servers are in use. Retrying in <span id="countdown">3</span> seconds.
+	res.send(`All ${cirrusServers.size} The PROUN gallery is full for visitors. Retrying in <span id="countdown">3</span> seconds.
 	<script>
 		var countdown = document.getElementById("countdown").textContent;
 		setInterval(function() {
