@@ -92,7 +92,7 @@ const file = {
 
 // Optionally detect if the user is not interacting (AFK) and disconnect them.
 const afk = {
-    enabled: false, // Set to true to enable the AFK system.
+    enabled: true, // Set to true to enable the AFK system.
     warnTimeout: 120, // The time to elapse before warning the user they are inactive.
     closeTimeout: 10, // The time after the warning when we disconnect the user.
 
