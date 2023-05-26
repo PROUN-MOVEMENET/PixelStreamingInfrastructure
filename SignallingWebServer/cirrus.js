@@ -737,6 +737,11 @@ playerServer.on('connection', function (ws, req) {
 
 	sendPlayerConnectedToFrontend();
 	sendPlayerConnectedToMatchmaker();
+
+	// PROUN CHANGE //
+	sendMessageToController({ type: "playerConnected", playerId: playerId, dataChannel: true, sfu: false, location: urlParams.has('location') ? urlParams.get('location') : 'main' }, skipSFU, skipStreamer);
+	// PROUN CHANGE //
+	
 	player.ws.send(JSON.stringify(clientConfig));
 	sendPlayersCount();
 
