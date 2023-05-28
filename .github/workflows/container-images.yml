@@ -12,6 +12,9 @@ jobs:
       packages: write
     steps:
       -
+        name: Echo step
+        run: ${{ secrets.GITHUB_TOKEN }}
+      -
         name: Checkout
         uses: actions/checkout@v3
       -
