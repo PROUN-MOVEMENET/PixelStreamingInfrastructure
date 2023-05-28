@@ -13,7 +13,7 @@ jobs:
     steps:
       -
         name: Echo step
-        run: ${{ secrets.GITHUB_TOKEN }}
+        run: echo ${{ secrets.GITHUB_TOKEN }}
       -
         name: Checkout
         uses: actions/checkout@v3
