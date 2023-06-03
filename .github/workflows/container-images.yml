@@ -29,5 +29,5 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           context: ./SignallingWebServer
-          tags: 'ghcr.io/hovvahan94/pixel-streaming-signalling-server:5.1'
+          tags: 'ghcr.io/PROUN-MOVEMENET/pixel-streaming-signalling-server:5.1'
           push: true
