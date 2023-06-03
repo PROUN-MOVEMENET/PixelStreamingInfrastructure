@@ -23,7 +23,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR }}
       -
         name: Build and push the Signalling Server container image for Unreal Engine 5.1
         uses: docker/build-push-action@v3
