@@ -24,8 +24,12 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR }}
-      -
-        name: Build and push the Signalling Server container image for Unreal Engine 5.1
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+      - name: Build and push the Signalling Server container image for Unreal Engine 5.1
         uses: docker/build-push-action@v3
         with:
           context: ./SignallingWebServer
