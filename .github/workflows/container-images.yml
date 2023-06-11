@@ -49,5 +49,5 @@ jobs:
           password: ${{ secrets.GHCR }}
     -
         name: Pull and run Signalling Server container image for Unreal Engine 5.1
-        run: docker pull proun-movemenet/pixelstreaminginfrastructure:ue5.1
+        run: docker pull proun-movemenet/pixelstreaminginfrastructure:ue5.
   
