@@ -15,9 +15,6 @@ jobs:
       packages: write
     steps:
       -
-        name: Echo step
-        run: echo ${{ github.actor }}
-      -
         name: Checkout
         uses: actions/checkout@v3
       -
