@@ -36,3 +36,11 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
+  pull-and-run:
+    runs-on: self-hosted
+    needs: signalling-server-image
+    steps:
+    -
+        name: Pull and run Signalling Server container image for Unreal Engine 5.1
+        run: docker pull ${{ env.REGISTRY }}/proun-movemenet/${{ IMAGE_NAME }}
+  
