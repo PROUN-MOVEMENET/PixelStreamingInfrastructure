@@ -5,7 +5,7 @@ on:
     branches: ['UE5.1']
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: pixelstreaminginfrastructure
 
 jobs:
   signalling-server-image:
@@ -49,5 +49,5 @@ jobs:
           password: ${{ secrets.GHCR }}
     -
         name: Pull and run Signalling Server container image for Unreal Engine 5.1
-        run: docker pull proun-movemenet/pixelstreaminginfrastructure:ue5.1
+        run: docker pull proun-movemenet/${{ IMAGE_NAME }}:ue5.1
   
