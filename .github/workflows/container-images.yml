@@ -42,5 +42,5 @@ jobs:
     steps:
     -
         name: Pull and run Signalling Server container image for Unreal Engine 5.1
-        run: docker pull ${{ env.REGISTRY }}/proun-movemenet/${{ env.IMAGE_NAME }}
+        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
   
