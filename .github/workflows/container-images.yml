@@ -58,8 +58,9 @@ jobs:
         name: Compose up
         run: |
             cd PixelStreamingInfrastructure
-            docker system prune
+            docker-compose down
             docker wait pixelstreaminginfrastructure
+            docker system prune
             docker-compose up
           
           
