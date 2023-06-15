@@ -47,10 +47,13 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR }}
-    -   name: Remove File
+    -   name: Remove existing Folder of Signalling
         uses: JesseTG/rm@v1.0.3
         with:
           path: ./PixelStreamingInfrastructure
+    -
+        name: Clone Signalling Server code for Unreal Engine 5.1
+        run: git clone https://github.com/PROUN-MOVEMENET/PixelStreamingInfrastructure/tree/UE5.1
           
           
   
