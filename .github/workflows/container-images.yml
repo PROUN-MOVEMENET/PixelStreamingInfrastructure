@@ -49,7 +49,6 @@ jobs:
           password: ${{ secrets.GHCR }}
     -
         name: Pull and run Signalling Server container image for Unreal Engine 5.1
-    -   run: |
-          dir
+    -   run: dir
           
   
