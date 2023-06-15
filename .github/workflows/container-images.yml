@@ -62,7 +62,9 @@ jobs:
             docker system prune -af
     -
         name: Compose up
-        run: dir
+        run: |
+            cd PixelStreamingInfrastructure
+            docker-compose up
           
           
   
