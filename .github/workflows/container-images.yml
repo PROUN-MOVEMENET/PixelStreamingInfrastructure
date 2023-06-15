@@ -55,12 +55,14 @@ jobs:
         name: Clone Signalling Server code for Unreal Engine 5.1
         run: git clone --branch UE5.1 https://github.com/PROUN-MOVEMENET/PixelStreamingInfrastructure.git
     -
-        name: Compose up
+        name: Remove ols containers and images
         run: |
             cd PixelStreamingInfrastructure
             docker-compose down
             docker system prune -af
-            docker-compose up
+    -
+        name: Compose up
+        run: docker-compose up
           
           
   
