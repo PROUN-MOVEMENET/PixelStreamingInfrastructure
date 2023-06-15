@@ -6,3 +6,4 @@ services:
       replicas: 2
     ports:
       - "81-82:80"
+      - "9001-9002:8888"
