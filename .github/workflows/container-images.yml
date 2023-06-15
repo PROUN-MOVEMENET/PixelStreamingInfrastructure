@@ -47,10 +47,13 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR }}
+    -   name: Remove File
+        uses: JesseTG/rm@v1.0.3
+        with:
+          path: ./PixelStreamingInfrastructure
     -
         name: Pull and run Signalling Server container image for Unreal Engine 5.1
-        run: |
-          rm -r PixelStreamingInfrastructure
-          git clone https://github.com/PROUN-MOVEMENET/PixelStreamingInfrastructure.git
+        run: git clone https://github.com/PROUN-MOVEMENET/PixelStreamingInfrastructure.git
+          
           
   
