@@ -64,7 +64,6 @@ jobs:
         name: Compose up
         run: |
             cd PixelStreamingInfrastructure
-            docker-compose up
-          
+            docker-compose up -d
           
   
