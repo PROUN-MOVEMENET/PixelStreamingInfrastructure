@@ -1,0 +1,10 @@
+version: "alpine"
+services:
+  signaling:
+    build: ./SignallingWebServer
+    deploy:
+      mode: global 
+      replicas: 2
+    ports:
+      - "81-82:80"
+      - "9001-9002:8888"
