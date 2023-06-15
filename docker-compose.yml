@@ -3,7 +3,6 @@ services:
   signaling:
     build: ./SignallingWebServer
     deploy:
-      mode: global 
       replicas: 2
     ports:
       - "81-82:80"
