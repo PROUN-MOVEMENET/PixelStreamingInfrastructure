@@ -62,7 +62,7 @@ jobs:
             docker system prune -af
     -
         name: Compose up
-        run: docker-compose up
+        run: dir
           
           
   
