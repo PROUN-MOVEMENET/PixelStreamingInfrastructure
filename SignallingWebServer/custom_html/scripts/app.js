@@ -2800,11 +2800,12 @@ function connect() {
 
     // Make a new websocket connection
     const connectionUrl = window.location.href
-        .replace("3000", "80") // PROUN CHANGE //
-        .replace("http://", "ws://")
         .replace("https://", "wss://")
+        .replace("http://", "ws://")
+        .replace("3000", "80") // PROUN CHANGE START //
         .replace("localhost", "journey.proun.am")
         .replace("192.168.1.22", "journey.proun.am");
+        // PROUN CHANGE END //
     console.log(`Creating a websocket connection to: ${connectionUrl}`);
     ws = new WebSocket(connectionUrl);
     ws.attemptStreamReconnection = true;

@@ -1,9 +1,8 @@
-version: "alpine"
+version: "3.3"
 services:
   signaling:
-    build: ./SignallingWebServer
+    image: ghcr.io/proun-movemenet/pixelstreaminginfrastructure:ue5.1
     deploy:
       replicas: 2
     ports:
       - "81-82:80"
-      - "9001-9002:8888"
