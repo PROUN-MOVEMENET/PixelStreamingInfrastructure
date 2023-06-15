@@ -36,6 +36,18 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta matchmaker
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/proun-movemenet/matchmaker
+      - name: Build and push the Mathcmaker container image for Unreal Engine 5.1
+        uses: docker/build-push-action@v3
+        with:
+          context: ./Matchmaker
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
   pull-and-run:
     runs-on: self-hosted
     needs: signalling-server-image
