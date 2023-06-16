@@ -4,7 +4,6 @@ services:
     image: ghcr.io/proun-movemenet/matchmaker:ue5.1
     ports:
       - "80:80"
-      - "9999:9999"
   signaling:
     image: ghcr.io/proun-movemenet/pixelstreaminginfrastructure:ue5.1
     depends_on:

@@ -8,7 +8,7 @@
 	"HomepageFile": "index.html",
 	"AdditionalRoutes": {},
 	"EnableWebserver": true,
-	"MatchmakerAddress": "",
+	"MatchmakerAddress": "matchmaker",
 	"MatchmakerPort": "9999",
 	"PublicIp": "localhost",
 	"HttpPort": 80,
