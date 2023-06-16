@@ -1,5 +1,9 @@
 version: "3.3"
 services:
+  matchmaker:
+    image: ghcr.io/proun-movemenet/matchmaker:ue5.1
+    ports:
+      - 80:80
   signaling:
     image: ghcr.io/proun-movemenet/pixelstreaminginfrastructure:ue5.1
     depends_on:
@@ -9,7 +13,4 @@ services:
     ports:
       - "81-82:80"
       - "9001-9002:8888"
-  matchmaker:
-    image: ghcr.io/proun-movemenet/matchmaker:ue5.1
-    ports:
-      - 80:80
+  
