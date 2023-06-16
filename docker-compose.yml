@@ -2,8 +2,15 @@ version: "3.3"
 services:
   signaling:
     image: ghcr.io/proun-movemenet/pixelstreaminginfrastructure:ue5.1
+    depends_on:
+      matchmaker:
+        condition: service_healthy
     deploy:
       replicas: 2
     ports:
       - "81-82:80"
       - "9001-9002:8888"
+  matchmaker:
+    image: ghcr.io/proun-movemenet/matchmaker:ue5.1
+    ports:
+      - 80:80

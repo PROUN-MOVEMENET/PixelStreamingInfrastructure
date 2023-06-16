@@ -1,6 +1,6 @@
 {
 	"UseFrontend": false,
-	"UseMatchmaker": false,
+	"UseMatchmaker": true,
 	"UseHTTPS": false,
 	"UseAuthentication": false,
 	"LogToFile": true,
@@ -8,7 +8,7 @@
 	"HomepageFile": "index.html",
 	"AdditionalRoutes": {},
 	"EnableWebserver": true,
-	"MatchmakerAddress": "192.168.6.60",
+	"MatchmakerAddress": "",
 	"MatchmakerPort": "9999",
 	"PublicIp": "localhost",
 	"HttpPort": 80,
