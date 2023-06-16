@@ -10,7 +10,7 @@
 	"EnableWebserver": true,
 	"MatchmakerAddress": "matchmaker",
 	"MatchmakerPort": "9999",
-	"PublicIp": "localhost",
+	"PublicIp": "http://journey.proun.am/",
 	"HttpPort": 80,
 	"HttpsPort": 443,
 	"StreamerPort": 8888,
