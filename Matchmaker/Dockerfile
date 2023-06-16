@@ -1,5 +1,5 @@
 # Use the current Long Term Support (LTS) version of Node.js
-FROM node:lts
+FROM node:16.4.2
 
 # Copy the signalling server source code from the build context
 COPY . /opt/Matchmaker
@@ -10,6 +10,7 @@ RUN npm install .
 
 # Expose TCP port 9999 for connections from the Matchmaker
 EXPOSE 80
+EXPOSE 9999
 
 # Set the signalling server as the container's entrypoint
 ENTRYPOINT ["/usr/local/bin/node", "/opt/Matchmaker/matchmaker.js"]
