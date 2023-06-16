@@ -45,8 +45,8 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           context: ./Matchmaker
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_matchmaker.outputs.tags }}
+          labels: ${{ steps.meta_matchmaker.outputs.labels }}
           push: true
   pull-and-run:
     runs-on: self-hosted
