@@ -6,11 +6,11 @@ services:
       - "80:80"
   signaling:
     image: ghcr.io/proun-movemenet/pixelstreaminginfrastructure:ue5.1
+    command: --HttpPort=84
     depends_on:
       - matchmaker
     deploy:
-      replicas: 2
+      replicas: 1
     ports:
-      - "81-82:80"
       - "9001-9002:8888"
   
