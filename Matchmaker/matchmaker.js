@@ -189,6 +189,7 @@ const matchmaker = net.createServer((connection) => {
 		}
 		if (message.type === 'connect') {
 			// A Cirrus server connects to this Matchmaker server.
+			console.log("myLOG", message.port)
 			cirrusServer = {
 				address: message.address,
 				port: message.port,
