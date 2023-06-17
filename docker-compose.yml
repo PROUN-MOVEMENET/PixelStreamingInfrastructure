@@ -1,12 +1,25 @@
 version: "3.3"
 services:
-  signaling:
+  matchmaker:
+    image: ghcr.io/proun-movemenet/matchmaker:ue5.1
+    ports:
+      - "80:80"
+  signaling1:
     image: ghcr.io/proun-movemenet/pixelstreaminginfrastructure:ue5.1
+    command: --HttpPort=81
     depends_on:
       - matchmaker
     deploy:
-      replicas: 2
+      replicas: 1
     ports:
-      - "81-82:80"
-      - "9001-9002:8888"
+      - "9001:8888"
+  signaling2:
+    image: ghcr.io/proun-movemenet/pixelstreaminginfrastructure:ue5.1
+    command: --HttpPort=82
+    depends_on:
+      - matchmaker
+    deploy:
+      replicas: 1
+    ports:
+      - "9002:8888"
   

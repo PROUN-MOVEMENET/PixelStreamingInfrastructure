@@ -8,7 +8,7 @@
 	"HomepageFile": "index.html",
 	"AdditionalRoutes": {},
 	"EnableWebserver": true,
-	"MatchmakerAddress": "http://journey.proun.am/",
+	"MatchmakerAddress": "matchmaker",
 	"MatchmakerPort": "9999",
 	"PublicIp": "journey.proun.am",
 	"HttpPort": 80,
