@@ -53,7 +53,12 @@
   echo Building frontend library...
   pushd %CD%\Frontend\library
   call ..\..\SignallingWebServer\platform_scripts\cmd\node\npm install
-  call ..\..\SignallingWebServer\platform_scripts\cmd\node\npx webpack
+  call ..\..\SignallingWebServer\platform_scripts\cmd\node\npm run build-dev
+  popd
+  pushd %CD%\Frontend\ui-library
+  call ..\..\SignallingWebServer\platform_scripts\cmd\node\npm install
+  call ..\..\SignallingWebServer\platform_scripts\cmd\node\npm link ../library
+  call ..\..\SignallingWebServer\platform_scripts\cmd\node\npm run build-dev
   popd
   echo End of build PS frontend lib step.
 
@@ -62,8 +67,8 @@
   echo Building Epic Games reference frontend...
   pushd %CD%\Frontend\implementations\EpicGames
   call ..\..\..\SignallingWebServer\platform_scripts\cmd\node\npm install
-  call ..\..\..\SignallingWebServer\platform_scripts\cmd\node\npm link ../../library
-  call ..\..\..\SignallingWebServer\platform_scripts\cmd\node\npx webpack
+  call ..\..\..\SignallingWebServer\platform_scripts\cmd\node\npm link ../../library ../../ui-library
+  call ..\..\..\SignallingWebServer\platform_scripts\cmd\node\npm run build-dev
   popd
   echo End of build reference frontend step.
   echo ----------------------------

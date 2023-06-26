@@ -1,17 +1,24 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-import * as libfrontend from '@epicgames-ps/lib-pixelstreamingfrontend-dev';
-
+import { Config, PixelStreaming } from '@epicgames-ps/lib-pixelstreamingfrontend-ue5.2';
+import { Application, PixelStreamingApplicationStyle } from '@epicgames-ps/lib-pixelstreamingfrontend-ui-ue5.2';
+const PixelStreamingApplicationStyles =
+    new PixelStreamingApplicationStyle();
+PixelStreamingApplicationStyles.applyStyleSheet();
 
 document.body.onload = function() {
 	// Example of how to set the logger level
-	//libfrontend.Logger.SetLoggerVerbosity(10);
+	// Logger.SetLoggerVerbosity(10);
 
 	// Create a config object
-	let config = new libfrontend.Config();
+	const config = new Config({ useUrlParams: true });
 
 	// Create a Native DOM delegate instance that implements the Delegate interface class
-	let application = new libfrontend.Application(config);
+	const stream = new PixelStreaming(config);
+	const application = new Application({
+		stream,
+		onColorModeChanged: (isLightMode) => PixelStreamingApplicationStyles.setColorMode(isLightMode)
+	});
 	// document.getElementById("centrebox").appendChild(application.rootElement);
 	document.body.appendChild(application.rootElement);
 }

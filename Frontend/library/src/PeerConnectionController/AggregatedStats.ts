@@ -10,6 +10,7 @@ import { DataChannelStats } from './DataChannelStats';
 import { CandidateStat } from './CandidateStat';
 import { CandidatePairStats } from './CandidatePairStats';
 import { OutBoundRTPStats, OutBoundVideoStats } from './OutBoundRTPStats';
+import { SessionStats } from './SessionStats';
 import { StreamStats } from './StreamStats';
 import { CodecStats } from './CodecStats';
 import { Logger } from '../Logger/Logger';
@@ -18,19 +19,20 @@ import { Logger } from '../Logger/Logger';
  * The Aggregated Stats that is generated from the RTC Stats Report
  */
 
-type RTCStatsTypePS = RTCStatsType | 'stream';
+type RTCStatsTypePS = RTCStatsType | 'stream' | 'media-playout';
 export class AggregatedStats {
     inboundVideoStats: InboundVideoStats;
     inboundAudioStats: InboundAudioStats;
     lastVideoStats: InboundVideoStats;
-	lastAudioStats: InboundAudioStats;
+    lastAudioStats: InboundAudioStats;
     candidatePair: CandidatePairStats;
     DataChannelStats: DataChannelStats;
     localCandidates: Array<CandidateStat>;
     remoteCandidates: Array<CandidateStat>;
     outBoundVideoStats: OutBoundVideoStats;
+    sessionStats: SessionStats;
     streamStats: StreamStats;
-	codecs: Map<string, string>;
+    codecs: Map<string, string>;
 
     constructor() {
         this.inboundVideoStats = new InboundVideoStats();
@@ -38,8 +40,9 @@ export class AggregatedStats {
         this.candidatePair = new CandidatePairStats();
         this.DataChannelStats = new DataChannelStats();
         this.outBoundVideoStats = new OutBoundVideoStats();
+        this.sessionStats = new SessionStats();
         this.streamStats = new StreamStats();
-		this.codecs = new Map<string, string>;
+        this.codecs = new Map<string, string>();
     }
 
     /**
@@ -60,7 +63,7 @@ export class AggregatedStats {
                 case 'certificate':
                     break;
                 case 'codec':
-					this.handleCodec(stat);
+                    this.handleCodec(stat);
                     break;
                 case 'data-channel':
                     this.handleDataChannel(stat);
@@ -72,6 +75,8 @@ export class AggregatedStats {
                     this.handleLocalCandidate(stat);
                     break;
                 case 'media-source':
+                    break;
+                case 'media-playout':
                     break;
                 case 'outbound-rtp':
                     break;
@@ -182,40 +187,40 @@ export class AggregatedStats {
     handleInBoundRTP(stat: InboundRTPStats) {
         switch (stat.kind) {
             case 'video':
-				// Need to convert to unknown first to remove an error around
-				// InboundVideoStats having the bitrate member which isn't found on
-				// the InboundRTPStats
-				this.inboundVideoStats = stat as unknown as InboundVideoStats;
+                // Need to convert to unknown first to remove an error around
+                // InboundVideoStats having the bitrate member which isn't found on
+                // the InboundRTPStats
+                this.inboundVideoStats = stat as unknown as InboundVideoStats;
 
                 if (this.lastVideoStats != undefined) {
                     this.inboundVideoStats.bitrate =
                         (8 *
                             (this.inboundVideoStats.bytesReceived -
                                 this.lastVideoStats.bytesReceived)) /
-                        (this.inboundVideoStats.timestamp - this.lastVideoStats.timestamp);
+                        (this.inboundVideoStats.timestamp -
+                            this.lastVideoStats.timestamp);
                     this.inboundVideoStats.bitrate = Math.floor(
                         this.inboundVideoStats.bitrate
                     );
-
                 }
                 this.lastVideoStats = { ...this.inboundVideoStats };
                 break;
             case 'audio':
-				// Need to convert to unknown first to remove an error around
-				// InboundAudioStats having the bitrate member which isn't found on
-				// the InboundRTPStats
-				this.inboundAudioStats = stat as unknown as InboundAudioStats;
+                // Need to convert to unknown first to remove an error around
+                // InboundAudioStats having the bitrate member which isn't found on
+                // the InboundRTPStats
+                this.inboundAudioStats = stat as unknown as InboundAudioStats;
 
-				if (this.lastAudioStats != undefined) {
+                if (this.lastAudioStats != undefined) {
                     this.inboundAudioStats.bitrate =
                         (8 *
                             (this.inboundAudioStats.bytesReceived -
                                 this.lastAudioStats.bytesReceived)) /
-                        (this.inboundAudioStats.timestamp - this.lastAudioStats.timestamp);
+                        (this.inboundAudioStats.timestamp -
+                            this.lastAudioStats.timestamp);
                     this.inboundAudioStats.bitrate = Math.floor(
                         this.inboundAudioStats.bitrate
                     );
-
                 }
                 this.lastAudioStats = { ...this.inboundAudioStats };
                 break;
@@ -264,11 +269,37 @@ export class AggregatedStats {
         }
     }
 
-	handleCodec(stat: CodecStats) {
-		const codecId = stat.id;
-		const codecType = `${stat.mimeType.replace("video/", "").replace("audio/", "")}${(stat.sdpFmtpLine) ? ` ${stat.sdpFmtpLine}` : ""}`;
-		this.codecs.set(codecId, codecType);
-	}
+    handleCodec(stat: CodecStats) {
+        const codecId = stat.id;
+        const codecType = `${stat.mimeType
+            .replace('video/', '')
+            .replace('audio/', '')}${
+            stat.sdpFmtpLine ? ` ${stat.sdpFmtpLine}` : ''
+        }`;
+        this.codecs.set(codecId, codecType);
+    }
+
+    handleSessionStatistics(
+        videoStartTime: number,
+        inputController: boolean | null,
+        videoEncoderAvgQP: number
+    ) {
+        const deltaTime = Date.now() - videoStartTime;
+        this.sessionStats.runTime = new Date(deltaTime)
+            .toISOString()
+            .substr(11, 8)
+            .toString();
+
+        const controlsStreamInput =
+            inputController === null
+                ? 'Not sent yet'
+                : inputController
+                ? 'true'
+                : 'false';
+        this.sessionStats.controlsStreamInput = controlsStreamInput;
+
+        this.sessionStats.videoEncoderAvgQP = videoEncoderAvgQP;
+    }
 
     /**
      * Check if a value coming in from our stats is actually a number

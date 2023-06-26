@@ -19,7 +19,8 @@ import {
     Flags,
     ControlSchemeType,
     TextParameters,
-    OptionParameters
+    OptionParameters,
+    NumericParameters
 } from '../Config/Config';
 import {
     EncoderSettings,
@@ -48,9 +49,19 @@ import {
     CoordinateConverter,
     UnquantizedDenormalizedUnsignedCoord
 } from '../Util/CoordinateConverter';
-import { Application } from '../Application/Application';
+import { PixelStreaming } from '../PixelStreaming/PixelStreaming';
 import { ITouchController } from '../Inputs/ITouchController';
-import { AFKOverlay } from '../AFK/AFKOverlay';
+import {
+    DataChannelCloseEvent,
+    DataChannelErrorEvent,
+    DataChannelOpenEvent,
+    HideFreezeFrameEvent,
+    LoadFreezeFrameEvent,
+    PlayStreamErrorEvent,
+    PlayStreamEvent,
+    PlayStreamRejectedEvent,
+    StreamerListMessageEvent
+} from '../Util/EventEmitter';
 /**
  * Entry point for the WebRTC Player
  */
@@ -74,7 +85,7 @@ export class WebRtcPlayerController {
     afkController: AFKController;
     videoElementParentClientRect: DOMRect;
     latencyStartTime: number;
-    application: Application;
+    pixelStreaming: PixelStreaming;
     streamMessageController: StreamMessageController;
     sendDescriptorController: SendDescriptorController;
     sendMessageController: SendMessageController;
@@ -88,7 +99,14 @@ export class WebRtcPlayerController {
     isQualityController: boolean;
     statsTimerHandle: number;
     file: FileTemplate;
-	preferredCodec: string;
+    preferredCodec: string;
+    peerConfig: RTCConfiguration;
+    videoAvgQp: number;
+    shouldReconnect: boolean;
+    isReconnecting: boolean;
+    reconnectAttempt: number;
+    subscribedStream: string | null;
+    signallingUrlBuilder: () => string;
 
     // if you override the disconnection message by calling the interface method setDisconnectMessageOverride
     // it will use this property to store the override message string
@@ -97,11 +115,11 @@ export class WebRtcPlayerController {
     /**
      *
      * @param config - the frontend config object
-     * @param application - the application object
+     * @param pixelStreaming - the PixelStreaming object
      */
-    constructor(config: Config, application: Application) {
+    constructor(config: Config, pixelStreaming: PixelStreaming) {
         this.config = config;
-        this.application = application;
+        this.pixelStreaming = pixelStreaming;
         this.responseController = new ResponseController();
         this.file = new FileTemplate();
 
@@ -111,9 +129,11 @@ export class WebRtcPlayerController {
         };
 
         // set up the afk logic class and connect up its method for closing the signaling server
-        const afkOverlay = new AFKOverlay(this.application.videoElementParent);
-        afkOverlay.onAction(() => this.onAfkTriggered());
-        this.afkController = new AFKController(this.config, afkOverlay);
+        this.afkController = new AFKController(
+            this.config,
+            this.pixelStreaming,
+            this.onAfkTriggered.bind(this)
+        );
         this.afkController.onAFKTimedOutCallback = () => {
             this.setDisconnectMessageOverride(
                 'You have been disconnected due to inactivity'
@@ -122,11 +142,11 @@ export class WebRtcPlayerController {
         };
 
         this.freezeFrameController = new FreezeFrameController(
-            this.application.videoElementParent
+            this.pixelStreaming.videoElementParent
         );
 
         this.videoPlayer = new VideoPlayer(
-            this.application.videoElementParent,
+            this.pixelStreaming.videoElementParent,
             this.config
         );
         this.videoPlayer.onVideoInitialized = () =>
@@ -156,6 +176,10 @@ export class WebRtcPlayerController {
 
         this.sendrecvDataChannelController = new DataChannelController();
         this.recvDataChannelController = new DataChannelController();
+        this.registerDataChannelEventEmitters(
+            this.sendrecvDataChannelController
+        );
+        this.registerDataChannelEventEmitters(this.recvDataChannelController);
         this.dataChannelSender = new DataChannelSender(
             this.sendrecvDataChannelController
         );
@@ -172,17 +196,20 @@ export class WebRtcPlayerController {
         this.webSocketController.onStreamerList = (
             messageList: MessageReceive.MessageStreamerList
         ) => this.handleStreamerListMessage(messageList);
-        this.webSocketController.onWebSocketOncloseOverlayMessage = (event) =>
-            this.application.onDisconnect(
+        this.webSocketController.onWebSocketOncloseOverlayMessage = (event) => {
+            this.pixelStreaming._onDisconnect(
                 `Websocket disconnect (${event.code}) ${
                     event.reason != '' ? '- ' + event.reason : ''
                 }`
             );
+            this.setVideoEncoderAvgQP(0);
+        };
         this.webSocketController.onOpen.addEventListener('open', () => {
-            const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.has(OptionParameters.StreamerId)) {
-                this.webSocketController.sendSubscribe(urlParams.get(OptionParameters.StreamerId));
-            } else {
+            const BrowserSendsOffer = this.config.isFlagEnabled(
+                Flags.BrowserSendOffer
+            );
+            if(!BrowserSendsOffer)
+            {
                 this.webSocketController.requestStreamerList();
             }
         });
@@ -192,6 +219,18 @@ export class WebRtcPlayerController {
             // stop sending stats on interval if we have closed our connection
             if (this.statsTimerHandle && this.statsTimerHandle !== undefined) {
                 window.clearInterval(this.statsTimerHandle);
+            }
+
+            // unregister all input device event handlers on disconnect
+            this.setTouchInputEnabled(false);
+            this.setMouseInputEnabled(false);
+            this.setKeyboardInputEnabled(false);
+            this.setGamePadInputEnabled(false);
+
+            if(this.shouldReconnect && this.config.getNumericSettingValue(NumericParameters.MaxReconnectAttempts) > 0) {
+                this.isReconnecting = true;
+                this.reconnectAttempt++;
+                this.restartStreamAutomatically();
             }
         });
 
@@ -210,12 +249,6 @@ export class WebRtcPlayerController {
         this.registerMessageHandlers();
         this.streamMessageController.populateDefaultProtocol();
 
-        // now that the application has finished instantiating connect the rest of the afk methods to the afk logic class
-        this.afkController.showAfkOverlay = () =>
-            this.application.showAfkOverlay(this.afkController.countDown);
-        this.afkController.hideCurrentOverlay = () =>
-            this.application.hideCurrentOverlay();
-
         this.inputClassesFactory = new InputClassesFactory(
             this.streamMessageController,
             this.videoPlayer,
@@ -224,12 +257,48 @@ export class WebRtcPlayerController {
 
         this.isUsingSFU = false;
         this.isQualityController = false;
-		this.preferredCodec = '';
+        this.preferredCodec = '';
+        this.shouldReconnect = true;
+        this.isReconnecting = false;
+        this.reconnectAttempt = 0;
 
-        this.config.addOnOptionSettingChangedListener(OptionParameters.StreamerId, (streamerid) => {
+        this.config._addOnOptionSettingChangedListener(
+            OptionParameters.StreamerId,
+            (streamerid) => {
+                if(streamerid === "") {
+                    return;
+                }
+
+                // close the current peer connection and create a new one
+                this.peerConnectionController.peerConnection.close();
+                this.peerConnectionController.createPeerConnection(
+                    this.peerConfig,
+                    this.preferredCodec
+                );
+                this.subscribedStream = streamerid;
                 this.webSocketController.sendSubscribe(streamerid);
             }
         );
+
+        this.setVideoEncoderAvgQP(-1);
+
+        this.signallingUrlBuilder =  () => {
+            let signallingServerUrl = this.config.getTextSettingValue(
+                TextParameters.SignallingServerUrl
+            );
+    
+            // If we are connecting to the SFU add a special url parameter to the url
+            if (this.config.isFlagEnabled(Flags.BrowserSendOffer)) {
+                signallingServerUrl += '?' + Flags.BrowserSendOffer + '=true';
+            }
+    
+            // This code is no longer needed, but is a good example for how subsequent config flags can be appended
+            // if (this.config.isFlagEnabled(Flags.BrowserSendOffer)) {
+            //     signallingServerUrl += (signallingServerUrl.includes('?') ? '&' : '?') + Flags.BrowserSendOffer + '=true';
+            // }
+    
+            return signallingServerUrl;
+        }
     }
 
     /**
@@ -258,7 +327,6 @@ export class WebRtcPlayerController {
                 message[0]
             );
         this.streamMessageController.fromStreamerHandlers.get(messageType)(
-            messageType,
             event.data
         );
         //} catch (e) {
@@ -275,27 +343,24 @@ export class WebRtcPlayerController {
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'QualityControlOwnership',
-            (messageType: string, data: ArrayBuffer) =>
-                this.onQualityControlOwnership(data)
+            (data: ArrayBuffer) => this.onQualityControlOwnership(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'Response',
-            (messageType: string, data: ArrayBuffer) =>
-                this.responseController.onResponse(data)
+            (data: ArrayBuffer) => this.responseController.onResponse(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'Command',
-            (messageType: string, data: ArrayBuffer) => {
+            (data: ArrayBuffer) => {
                 this.onCommand(data);
             }
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'FreezeFrame',
-            (messageType: string, data: ArrayBuffer) =>
-                this.onFreezeFrameMessage(data)
+            (data: ArrayBuffer) => this.onFreezeFrameMessage(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
@@ -305,38 +370,32 @@ export class WebRtcPlayerController {
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'VideoEncoderAvgQP',
-            (messageType: string, data: ArrayBuffer) =>
-                this.handleVideoEncoderAvgQP(data)
+            (data: ArrayBuffer) => this.handleVideoEncoderAvgQP(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'LatencyTest',
-            (messageType: string, data: ArrayBuffer) =>
-                this.handleLatencyTestResult(data)
+            (data: ArrayBuffer) => this.handleLatencyTestResult(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'InitialSettings',
-            (messageType: string, data: ArrayBuffer) =>
-                this.handleInitialSettings(data)
+            (data: ArrayBuffer) => this.handleInitialSettings(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'FileExtension',
-            (messageType: string, data: ArrayBuffer) =>
-                this.onFileExtension(data)
+            (data: ArrayBuffer) => this.onFileExtension(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'FileMimeType',
-            (messageType: string, data: ArrayBuffer) =>
-                this.onFileMimeType(data)
+            (data: ArrayBuffer) => this.onFileMimeType(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'FileContents',
-            (messageType: string, data: ArrayBuffer) =>
-                this.onFileContents(data)
+            (data: ArrayBuffer) => this.onFileContents(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
@@ -348,64 +407,78 @@ export class WebRtcPlayerController {
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'InputControlOwnership',
-            (messageType: string, data: ArrayBuffer) =>
-                this.onInputControlOwnership(data)
+            (data: ArrayBuffer) => this.onInputControlOwnership(data)
+        );
+        this.streamMessageController.registerMessageHandler(
+            MessageDirection.FromStreamer,
+            'GamepadResponse',
+            (data: ArrayBuffer) => this.onGamepadResponse(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.FromStreamer,
             'Protocol',
-            (messageType: string, data: ArrayBuffer) =>
-                this.onProtocolMessage(data)
+            (data: ArrayBuffer) => this.onProtocolMessage(data)
         );
 
         // To Streamer
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'IFrameRequest',
-            (messageType: string) =>
-                this.sendMessageController.sendMessageToStreamer(messageType)
+            () =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'IFrameRequest'
+                )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'RequestQualityControl',
-            (messageType: string) =>
-                this.sendMessageController.sendMessageToStreamer(messageType)
+            () =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'RequestQualityControl'
+                )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'FpsRequest',
-            (messageType: string) =>
-                this.sendMessageController.sendMessageToStreamer(messageType)
+            () => this.sendMessageController.sendMessageToStreamer('FpsRequest')
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'AverageBitrateRequest',
-            (messageType: string) =>
-                this.sendMessageController.sendMessageToStreamer(messageType)
+            () =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'AverageBitrateRequest'
+                )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'StartStreaming',
-            (messageType: string) =>
-                this.sendMessageController.sendMessageToStreamer(messageType)
+            () =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'StartStreaming'
+                )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'StopStreaming',
-            (messageType: string) =>
-                this.sendMessageController.sendMessageToStreamer(messageType)
+            () =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'StopStreaming'
+                )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'LatencyTest',
-            (messageType: string) =>
-                this.sendMessageController.sendMessageToStreamer(messageType)
+            () =>
+                this.sendMessageController.sendMessageToStreamer('LatencyTest')
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'RequestInitialSettings',
-            (messageType: string) =>
-                this.sendMessageController.sendMessageToStreamer(messageType)
+            () =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'RequestInitialSettings'
+                )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
@@ -417,156 +490,232 @@ export class WebRtcPlayerController {
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'UIInteraction',
-            (messageType: string, data: object) =>
+            (data: object) =>
                 this.sendDescriptorController.emitUIInteraction(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'Command',
-            (messageType: string, data: object) =>
-                this.sendDescriptorController.emitCommand(data)
+            (data: object) => this.sendDescriptorController.emitCommand(data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'KeyDown',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'KeyDown',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'KeyUp',
-            (messageType: string, data: Array<number>) =>
-                this.sendMessageController.sendMessageToStreamer(
-                    messageType,
-                    data
-                )
+            (data: Array<number>) =>
+                this.sendMessageController.sendMessageToStreamer('KeyUp', data)
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'KeyPress',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'KeyPress',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'MouseEnter',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'MouseEnter',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'MouseLeave',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'MouseLeave',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'MouseDown',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'MouseDown',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'MouseUp',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'MouseUp',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'MouseMove',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'MouseMove',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'MouseWheel',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'MouseWheel',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'MouseDouble',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'MouseDouble',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'TouchStart',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'TouchStart',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'TouchEnd',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'TouchEnd',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'TouchMove',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'TouchMove',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
-            'GamepadButtonPressed',
-            (messageType: string, data: Array<number>) =>
+            'GamepadConnected',
+            () =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'GamepadConnected'
+                )
+        );
+        this.streamMessageController.registerMessageHandler(
+            MessageDirection.ToStreamer,
+            'GamepadButtonPressed',
+            (data: Array<number>) =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'GamepadButtonPressed',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'GamepadButtonReleased',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'GamepadButtonReleased',
                     data
                 )
         );
         this.streamMessageController.registerMessageHandler(
             MessageDirection.ToStreamer,
             'GamepadAnalog',
-            (messageType: string, data: Array<number>) =>
+            (data: Array<number>) =>
                 this.sendMessageController.sendMessageToStreamer(
-                    messageType,
+                    'GamepadAnalog',
+                    data
+                )
+        );
+        this.streamMessageController.registerMessageHandler(
+            MessageDirection.ToStreamer,
+            'GamepadDisconnected',
+            (data: Array<number>) =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'GamepadDisconnected',
+                    data
+                )
+        );
+        this.streamMessageController.registerMessageHandler(
+            MessageDirection.ToStreamer,
+            'XRHMDTransform',
+            (data: Array<number>) =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'XRHMDTransform',
+                    data
+                )
+        );
+        this.streamMessageController.registerMessageHandler(
+            MessageDirection.ToStreamer,
+            'XRControllerTransform',
+            (data: Array<number>) =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'XRControllerTransform',
+                    data
+                )
+        );
+        this.streamMessageController.registerMessageHandler(
+            MessageDirection.ToStreamer,
+            'XRSystem',
+            (data: Array<number>) =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'XRSystem',
+                    data
+                )
+        );
+        this.streamMessageController.registerMessageHandler(
+            MessageDirection.ToStreamer,
+            'XRButtonTouched',
+            (data: Array<number>) =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'XRButtonTouched',
+                    data
+                )
+        );
+        this.streamMessageController.registerMessageHandler(
+            MessageDirection.ToStreamer,
+            'XRButtonPressed',
+            (data: Array<number>) =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'XRButtonPressed',
+                    data
+                )
+        );
+        this.streamMessageController.registerMessageHandler(
+            MessageDirection.ToStreamer,
+            'XRButtonReleased',
+            (data: Array<number>) =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'XRButtonReleased',
+                    data
+                )
+        );
+        this.streamMessageController.registerMessageHandler(
+            MessageDirection.ToStreamer,
+            'XRAnalog',
+            (data: Array<number>) =>
+                this.sendMessageController.sendMessageToStreamer(
+                    'XRAnalog',
                     data
                 )
         );
@@ -593,7 +742,7 @@ export class WebRtcPlayerController {
         );
         const command: MessageOnScreenKeyboard = JSON.parse(commandAsString);
         if (command.command === 'onScreenKeyboard') {
-            this.application.activateOnScreenKeyboard(command);
+            this.pixelStreaming._activateOnScreenKeyboard(command);
         }
     }
 
@@ -643,7 +792,11 @@ export class WebRtcPlayerController {
                             Logger.Error(
                                 Logger.GetStackTrace(),
                                 `ToStreamer->${messageType} protocol definition was malformed as it didn't contain at least an id and a byteLength\n
-										   Definition was: ${JSON.stringify(message, null, 2)}`
+                                           Definition was: ${JSON.stringify(
+                                               message,
+                                               null,
+                                               2
+                                           )}`
                             );
                             // return in a forEach is equivalent to a continue in a normal for loop
                             return;
@@ -689,7 +842,7 @@ export class WebRtcPlayerController {
                             Logger.Error(
                                 Logger.GetStackTrace(),
                                 `FromStreamer->${messageType} protocol definition was malformed as it didn't contain at least an id\n
-							Definition was: ${JSON.stringify(message, null, 2)}`
+                            Definition was: ${JSON.stringify(message, null, 2)}`
                             );
                             // return in a forEach is equivalent to a continue in a normal for loop
                             return;
@@ -743,7 +896,17 @@ export class WebRtcPlayerController {
             Logger.GetStackTrace(),
             `Received input controller message - will your input control the stream: ${inputControlOwnership}`
         );
-        this.application.onInputControlOwnership(inputControlOwnership);
+        this.pixelStreaming._onInputControlOwnership(inputControlOwnership);
+    }
+
+    /**
+     * 
+     * @param message 
+     */
+    onGamepadResponse(message: ArrayBuffer) {
+        const responseString = new TextDecoder('utf-16').decode(message.slice(1));
+        const responseJSON = JSON.parse(responseString);
+        this.gamePadController.onGamepadResponseReceived(responseJSON.controllerId);
     }
 
     onAfkTriggered(): void {
@@ -781,16 +944,19 @@ export class WebRtcPlayerController {
         }
 
         // if a websocket object has not been created connect normally without closing
-        if (!this.webSocketController.webSocket) {
+        if (
+            !this.webSocketController.webSocket ||
+            this.webSocketController.webSocket.readyState === WebSocket.CLOSED
+        ) {
             Logger.Log(
                 Logger.GetStackTrace(),
                 'A websocket connection has not been made yet so we will start the stream'
             );
-            this.application.onWebRtcAutoConnect();
+            this.pixelStreaming._onWebRtcAutoConnect();
             this.connectToSignallingServer();
         } else {
             // set the replay status so we get a text overlay over an action overlay
-            this.application.showActionOrErrorOnDisconnect = false;
+            this.pixelStreaming._showActionOrErrorOnDisconnect = false;
 
             // set the disconnect message
             this.setDisconnectMessageOverride('Restarting stream...');
@@ -800,7 +966,7 @@ export class WebRtcPlayerController {
 
             // wait for the connection to close and restart the connection
             const autoConnectTimeout = setTimeout(() => {
-                this.application.onWebRtcAutoConnect();
+                this.pixelStreaming._onWebRtcAutoConnect();
                 this.connectToSignallingServer();
                 clearTimeout(autoConnectTimeout);
             }, 3000);
@@ -808,21 +974,18 @@ export class WebRtcPlayerController {
     }
 
     /**
-     * Send an Iframe request to the streamer
-     */
-    requestKeyFrame() {
-        this.streamMessageController.toStreamerHandlers.get('IFrameRequest')(
-            'IFrameRequest'
-        );
-    }
-
-    /**
      * Loads a freeze frame if it is required otherwise shows the play overlay
      */
     loadFreezeFrameOrShowPlayOverlay() {
+        this.pixelStreaming.dispatchEvent(
+            new LoadFreezeFrameEvent({
+                shouldShowPlayOverlay: this.shouldShowPlayOverlay,
+                isValid: this.freezeFrameController.valid,
+                jpegData: this.freezeFrameController.jpeg
+            })
+        );
         if (this.shouldShowPlayOverlay === true) {
             Logger.Log(Logger.GetStackTrace(), 'showing play overlay');
-            this.application.showPlayOverlay();
             this.resizePlayerStyle();
         } else {
             Logger.Log(Logger.GetStackTrace(), 'showing freeze frame');
@@ -859,6 +1022,9 @@ export class WebRtcPlayerController {
             6
         );
         setTimeout(() => {
+            this.pixelStreaming.dispatchEvent(
+                new HideFreezeFrameEvent()
+            );
             this.freezeFrameController.hideFreezeFrame();
         }, this.freezeFrameController.freezeFrameDelay);
         if (this.videoPlayer.getVideoElement()) {
@@ -898,13 +1064,12 @@ export class WebRtcPlayerController {
      */
     playStream() {
         if (!this.videoPlayer.getVideoElement()) {
-            this.application.showErrorOverlay(
-                'Could not play video stream because the video player was not initialized correctly.'
+            const message =
+                'Could not play video stream because the video player was not initialized correctly.';
+            this.pixelStreaming.dispatchEvent(
+                new PlayStreamErrorEvent({ message })
             );
-            Logger.Error(
-                Logger.GetStackTrace(),
-                'Could not player video stream because the video player was not initialized correctly.'
-            );
+            Logger.Error(Logger.GetStackTrace(), message);
 
             // set the disconnect message
             this.setDisconnectMessageOverride(
@@ -924,11 +1089,8 @@ export class WebRtcPlayerController {
             return;
         }
 
-        this.touchController = this.inputClassesFactory.registerTouch(
-            this.config.isFlagEnabled(Flags.FakeMouseWithTouches),
-            this.videoElementParentClientRect
-        );
-        this.application.hideCurrentOverlay();
+        this.setTouchInputEnabled(this.config.isFlagEnabled(Flags.TouchInput));
+        this.pixelStreaming.dispatchEvent(new PlayStreamEvent());
 
         if (this.streamController.audioElement.srcObject) {
             this.streamController.audioElement.muted =
@@ -945,7 +1107,11 @@ export class WebRtcPlayerController {
                         Logger.GetStackTrace(),
                         'Browser does not support autoplaying video without interaction - to resolve this we are going to show the play button overlay.'
                     );
-                    this.application.showPlayOverlay();
+                    this.pixelStreaming.dispatchEvent(
+                        new PlayStreamRejectedEvent({
+                            reason: onRejectedReason
+                        })
+                    );
                 });
         } else {
             this.playVideo();
@@ -969,7 +1135,9 @@ export class WebRtcPlayerController {
                 Logger.GetStackTrace(),
                 'Browser does not support autoplaying video without interaction - to resolve this we are going to show the play button overlay.'
             );
-            this.application.showPlayOverlay();
+            this.pixelStreaming.dispatchEvent(
+                new PlayStreamRejectedEvent({ reason: onRejectedReason })
+            );
         });
     }
 
@@ -980,35 +1148,15 @@ export class WebRtcPlayerController {
         if (this.config.isFlagEnabled(Flags.AutoPlayVideo)) {
             // attempt to play the video
             this.playStream();
-        } else {
-            this.application.showPlayOverlay();
         }
         this.resizePlayerStyle();
-    }
-
-    buildSignallingServerUrl() {
-        let signallingServerUrl = this.config.getTextSettingValue(
-            TextParameters.SignallingServerUrl
-        );
-
-        // If we are connecting to the SFU add a special url parameter to the url
-        if (this.config.isFlagEnabled(Flags.PreferSFU)) {
-            signallingServerUrl += '?' + Flags.PreferSFU + '=true';
-        }
-
-		// If we are sending the offer add a special url parameter to the url, making sure we append correctly
-		if (this.config.isFlagEnabled(Flags.BrowserSendOffer)) {
-            signallingServerUrl += (signallingServerUrl.includes('?') ? '&' : '?') + Flags.BrowserSendOffer + '=true';
-        }
-
-        return signallingServerUrl;
     }
 
     /**
      * Connect to the Signaling server
      */
     connectToSignallingServer() {
-        const signallingUrl = this.buildSignallingServerUrl();
+        const signallingUrl = this.signallingUrlBuilder();
         this.webSocketController.connect(signallingUrl);
     }
 
@@ -1018,6 +1166,7 @@ export class WebRtcPlayerController {
      * @remark RTC Peer Connection on Ice Candidate event have it handled by handle Send Ice Candidate
      */
     startSession(peerConfig: RTCConfiguration) {
+        this.peerConfig = peerConfig;
         // check for forcing turn
         if (this.config.isFlagEnabled(Flags.ForceTURN)) {
             // check for a turn server
@@ -1039,9 +1188,9 @@ export class WebRtcPlayerController {
 
         // set up the peer connection controller
         this.peerConnectionController = new PeerConnectionController(
-            peerConfig,
+            this.peerConfig,
             this.config,
-			this.preferredCodec
+            this.preferredCodec
         );
 
         // set up peer connection controller video stats
@@ -1070,9 +1219,20 @@ export class WebRtcPlayerController {
 
         // set up webRtc text overlays
         this.peerConnectionController.showTextOverlayConnecting = () =>
-            this.application.onWebRtcConnecting();
+            this.pixelStreaming._onWebRtcConnecting();
         this.peerConnectionController.showTextOverlaySetupFailure = () =>
-            this.application.onWebRtcFailed();
+            this.pixelStreaming._onWebRtcFailed();
+        let webRtcConnectedSent = false;
+        this.peerConnectionController.onIceConnectionStateChange = () => {
+            // Browsers emit "connected" when getting first connection and "completed" when finishing
+            // candidate checking. However, sometimes browsers can skip "connected" and only emit "completed".
+            // Therefore need to check both cases and emit onWebRtcConnected only once on the first hit.
+            if (!webRtcConnectedSent && 
+                ["connected", "completed"].includes(this.peerConnectionController.peerConnection.iceConnectionState)) {
+                this.pixelStreaming._onWebRtcConnected();
+                webRtcConnectedSent = true;
+            }
+        };
 
         /* RTC Peer Connection on Track event -> handle on track */
         this.peerConnectionController.onTrack = (trackEvent: RTCTrackEvent) =>
@@ -1157,9 +1317,81 @@ export class WebRtcPlayerController {
      * Handles when the signalling server gives us the list of streamer ids.
      */
     handleStreamerListMessage(messageStreamerList: MessageStreamerList) {
-        Logger.Log(Logger.GetStackTrace(), `Got streamer list ${messageStreamerList.ids}`, 6);
-        messageStreamerList.ids.unshift(''); // add an empty option at the top
-        this.config.setOptionSettingOptions(OptionParameters.StreamerId, messageStreamerList.ids);
+        Logger.Log(
+            Logger.GetStackTrace(),
+            `Got streamer list ${messageStreamerList.ids}`,
+            6
+        );
+
+        if(this.isReconnecting) {
+            if(messageStreamerList.ids.includes(this.subscribedStream)) {
+                // If we're reconnecting and the previously subscribed stream has come back, resubscribe to it
+                this.isReconnecting = false;
+                this.reconnectAttempt = 0;
+                this.webSocketController.sendSubscribe(this.subscribedStream);
+            } else if(this.reconnectAttempt < this.config.getNumericSettingValue(NumericParameters.MaxReconnectAttempts)) {
+                // Our previous stream hasn't come back, wait 2 seconds and request an updated stream list
+                this.reconnectAttempt++;
+                setTimeout(() => {
+                    this.webSocketController.requestStreamerList();
+                }, 2000)
+            } else {
+                // We've exhausted our reconnect attempts, return to main screen
+                this.reconnectAttempt = 0;
+                this.isReconnecting = false;
+                this.shouldReconnect = false;
+                this.webSocketController.close();
+                
+                this.config.setOptionSettingValue(
+                    OptionParameters.StreamerId,
+                    ""
+                );
+                this.config.setOptionSettingOptions(
+                    OptionParameters.StreamerId,
+                    []
+                );
+            }
+        } else {
+            const settingOptions = [...messageStreamerList.ids]; // copy the original messageStreamerList.ids
+            settingOptions.unshift(''); // add an empty option at the top
+            this.config.setOptionSettingOptions(
+                OptionParameters.StreamerId,
+                settingOptions
+            );
+
+            const urlParams = new URLSearchParams(window.location.search);
+            let autoSelectedStreamerId: string | null = null;
+            if (messageStreamerList.ids.length == 1) {
+                // If there's only a single streamer, subscribe to it regardless of what is in the URL
+                autoSelectedStreamerId = messageStreamerList.ids[0];
+            } else if (
+                this.config.isFlagEnabled(Flags.PreferSFU) &&
+                messageStreamerList.ids.includes('SFU')
+            ) {
+                // If the SFU toggle is on and there's an SFU connected, subscribe to it regardless of what is in the URL
+                autoSelectedStreamerId = 'SFU';
+            } else if (
+                urlParams.has(OptionParameters.StreamerId) &&
+                messageStreamerList.ids.includes(
+                    urlParams.get(OptionParameters.StreamerId)
+                )
+            ) {
+                // If there's a streamer ID in the URL and a streamer with this ID is connected, set it as the selected streamer
+                autoSelectedStreamerId = urlParams.get(OptionParameters.StreamerId);
+            }
+            if (autoSelectedStreamerId !== null) {
+                this.config.setOptionSettingValue(
+                    OptionParameters.StreamerId,
+                    autoSelectedStreamerId
+                );
+            }
+            this.pixelStreaming.dispatchEvent(
+                new StreamerListMessageEvent({
+                    messageStreamerList,
+                    autoSelectedStreamerId
+                })
+            );
+        }
     }
 
     /**
@@ -1185,11 +1417,11 @@ export class WebRtcPlayerController {
     handleWebRtcOffer(Offer: MessageOffer) {
         Logger.Log(Logger.GetStackTrace(), `Got offer sdp ${Offer.sdp}`, 6);
 
-		this.isUsingSFU = (Offer.sfu) ? Offer.sfu : false;
-		if(this.isUsingSFU) {
-			// Disable negotiating with the sfu as the sfu only supports one codec at a time
-			this.peerConnectionController.preferredCodec = "";
-		}
+        this.isUsingSFU = Offer.sfu ? Offer.sfu : false;
+        if (this.isUsingSFU) {
+            // Disable negotiating with the sfu as the sfu only supports one codec at a time
+            this.peerConnectionController.preferredCodec = '';
+        }
 
         const sdpOffer: RTCSessionDescriptionInit = {
             sdp: Offer.sdp,
@@ -1252,7 +1484,7 @@ export class WebRtcPlayerController {
         // start the afk warning timer as PS is now running
         this.afkController.startAfkWarningTimer();
         // show the overlay that we have negotiated a connection
-        this.application.onWebRtcSdp();
+        this.pixelStreaming._onWebRtcSdp();
 
         if (this.statsTimerHandle && this.statsTimerHandle !== undefined) {
             window.clearInterval(this.statsTimerHandle);
@@ -1261,11 +1493,9 @@ export class WebRtcPlayerController {
         this.statsTimerHandle = window.setInterval(() => this.getStats(), 1000);
 
         /*  */
-        this.activateRegisterMouse();
-        this.keyboardController = this.inputClassesFactory.registerKeyBoard(
-            this.config
-        );
-        this.gamePadController = this.inputClassesFactory.registerGamePad();
+        this.setMouseInputEnabled(this.config.isFlagEnabled(Flags.MouseInput));
+        this.setKeyboardInputEnabled(this.config.isFlagEnabled(Flags.KeyboardInput));
+        this.setGamePadInputEnabled(this.config.isFlagEnabled(Flags.GamepadInput));
     }
 
     /**
@@ -1344,17 +1574,6 @@ export class WebRtcPlayerController {
     }
 
     /**
-     * registers the mouse for use in WebRtcPlayerController
-     */
-    activateRegisterMouse() {
-        const mouseMode = this.config.isFlagEnabled(Flags.HoveringMouseMode)
-            ? ControlSchemeType.HoveringMouse
-            : ControlSchemeType.LockedMouse;
-        this.mouseController =
-            this.inputClassesFactory.registerMouse(mouseMode);
-    }
-
-    /**
      * Set the freeze frame overlay to the player div
      */
     setUpMouseAndFreezeFrame() {
@@ -1370,7 +1589,24 @@ export class WebRtcPlayerController {
      * Close the Connection to the signaling server
      */
     closeSignalingServer() {
-        this.webSocketController.close();
+        // We explicitly called close, therefore we don't want to trigger auto reconnect
+        this.shouldReconnect = false;
+        this.webSocketController?.close();
+    }
+
+    /**
+     * Close the peer connection
+     */
+    closePeerConnection() {
+        this.peerConnectionController?.close();
+    }
+
+    /**
+     * Close all connections
+     */
+    close() {
+        this.closeSignalingServer();
+        this.closePeerConnection();
     }
 
     /**
@@ -1391,61 +1627,84 @@ export class WebRtcPlayerController {
     }
 
     /**
-     * Send the Encoder Settings to the UE Instance as a UE UI Descriptor.
-     * @param encoder - Encoder Settings
+     * Send the MinQP encoder setting to the UE Instance.
+     * @param minQP - The lower bound for QP when encoding
+     * valid values are (1-51) where:
+     * 1 = Best quality but highest bitrate.
+     * 51 = Worst quality but lowest bitrate.
+     * By default the minQP is 1 meaning the encoder is free
+     * to aim for the best quality it can on the given network link.
      */
-    sendEncoderSettings(encoder: EncoderSettings) {
-        Logger.Log(
-            Logger.GetStackTrace(),
-            '----   Encoder Settings    ----\n' +
-                JSON.stringify(encoder, undefined, 4) +
-                '\n-------------------------------',
-            6
-        );
+    sendEncoderMinQP(minQP: number) {
+        Logger.Log(Logger.GetStackTrace(), `MinQP=${minQP}\n`, 6);
 
-        if (encoder.MinQP != null) {
+        if (minQP != null) {
             this.sendDescriptorController.emitCommand({
-                'Encoder.MinQP': encoder.MinQP
-            });
-        }
-        if (encoder.MaxQP != null) {
-            this.sendDescriptorController.emitCommand({
-                'Encoder.MaxQP': encoder.MaxQP
+                'Encoder.MinQP': minQP
             });
         }
     }
 
     /**
-     * Send the WebRTC Settings to the UE Instance as a UE UI Descriptor.
-     * @param webRTC - Web RTC Settings
+     * Send the MaxQP encoder setting to the UE Instance.
+     * @param maxQP - The upper bound for QP when encoding
+     * valid values are (1-51) where:
+     * 1 = Best quality but highest bitrate.
+     * 51 = Worst quality but lowest bitrate.
+     * By default the maxQP is 51 meaning the encoder is free
+     * to drop quality as low as needed on the given network link.
      */
-    sendWebRtcSettings(webRTC: WebRTCSettings) {
-        Logger.Log(
-            Logger.GetStackTrace(),
-            '----   WebRTC Settings    ----\n' +
-                JSON.stringify(webRTC, undefined, 4) +
-                '\n-------------------------------',
-            6
-        );
+     sendEncoderMaxQP(maxQP: number) {
+        Logger.Log(Logger.GetStackTrace(), `MaxQP=${maxQP}\n`, 6);
 
-        // 4.27 and 5 compatibility
-        if (webRTC.FPS != null) {
+        if (maxQP != null) {
             this.sendDescriptorController.emitCommand({
-                'WebRTC.Fps': webRTC.FPS
-            });
-            this.sendDescriptorController.emitCommand({
-                'WebRTC.MaxFps': webRTC.FPS
+                'Encoder.MaxQP': maxQP
             });
         }
-        if (webRTC.MinBitrate != null) {
+    }
+
+    /**
+     * Send the { WebRTC.MinBitrate: SomeNumber }} command to UE to set 
+     * the minimum bitrate that we allow WebRTC to use 
+     * (note setting this too high in poor networks can be problematic).
+     * @param minBitrate - The minimum bitrate we would like WebRTC to not fall below.
+     */
+    sendWebRTCMinBitrate(minBitrate: number) {
+        Logger.Log(Logger.GetStackTrace(), `WebRTC Min Bitrate=${minBitrate}`, 6);
+        if (minBitrate != null) {
             this.sendDescriptorController.emitCommand({
-                'PixelStreaming.WebRTC.MinBitrate': webRTC.MinBitrate
+                'WebRTC.MinBitrate': minBitrate
             });
         }
-        if (webRTC.MaxBitrate != null) {
+    }
+
+    /**
+     * Send the { WebRTC.MaxBitrate: SomeNumber }} command to UE to set 
+     * the minimum bitrate that we allow WebRTC to use 
+     * (note setting this too low could result in blocky video).
+     * @param minBitrate - The minimum bitrate we would like WebRTC to not fall below.
+     */
+     sendWebRTCMaxBitrate(maxBitrate: number) {
+        Logger.Log(Logger.GetStackTrace(), `WebRTC Max Bitrate=${maxBitrate}`, 6);
+        if (maxBitrate != null) {
             this.sendDescriptorController.emitCommand({
-                'PixelStreaming.WebRTC.MaxBitrate ': webRTC.MaxBitrate
+                'WebRTC.MaxBitrate': maxBitrate
             });
+        }
+    }
+
+    /**
+     * Send the { WebRTC.Fps: SomeNumber }} UE 5.0+
+     * and { WebRTC.MaxFps } UE 4.27 command to set 
+     * the maximum fps we would like WebRTC to stream at. 
+     * @param fps - The maximum stream fps.
+     */
+     sendWebRTCFps(fps: number) {
+        Logger.Log(Logger.GetStackTrace(), `WebRTC FPS=${fps}`, 6);
+        if (fps != null) {
+            this.sendDescriptorController.emitCommand({'WebRTC.Fps': fps});
+            this.sendDescriptorController.emitCommand({'WebRTC.MaxFps': fps}); /* TODO: Remove when UE 4.27 unsupported. */
         }
     }
 
@@ -1470,7 +1729,45 @@ export class WebRtcPlayerController {
             '----   Sending Request for an IFrame  ----',
             6
         );
-        this.streamMessageController.toStreamerHandlers.get('IFrameRequest');
+        this.streamMessageController.toStreamerHandlers.get('IFrameRequest')();
+    }
+
+    /**
+     * Send a UIInteraction message
+     */
+    emitUIInteraction(descriptor: object | string) {
+        Logger.Log(
+            Logger.GetStackTrace(),
+            '----   Sending custom UIInteraction message   ----',
+            6
+        );
+        this.sendDescriptorController.emitUIInteraction(descriptor);
+    }
+
+    /**
+     * Send a Command message
+     */
+    emitCommand(descriptor: object) {
+        Logger.Log(
+            Logger.GetStackTrace(),
+            '----   Sending custom Command message   ----',
+            6
+        );
+        this.sendDescriptorController.emitCommand(descriptor);
+    }
+
+    /**
+     * Send a console command message
+     */
+    emitConsoleCommand(command: string) {
+        Logger.Log(
+            Logger.GetStackTrace(),
+            '----   Sending custom Command:ConsoleCommand message   ----',
+            6
+        );
+        this.sendDescriptorController.emitCommand({
+            ConsoleCommand: command,
+        });
     }
 
     /**
@@ -1527,7 +1824,7 @@ export class WebRtcPlayerController {
                     latencyTestResults.networkLatency,
                 +latencyTestResults.CaptureToSendMs);
         }
-        this.application.onLatencyTestResult(latencyTestResults);
+        this.pixelStreaming._onLatencyTestResult(latencyTestResults);
     }
 
     /**
@@ -1560,7 +1857,7 @@ export class WebRtcPlayerController {
                 parsedInitialSettings.PixelStreaming;
         }
 
-        if (parsedInitialSettings.ConfigOptions) {
+        if (parsedInitialSettings.ConfigOptions && parsedInitialSettings.ConfigOptions.DefaultToHover !== undefined) {
             this.config.setFlagEnabled(
                 Flags.HoveringMouseMode,
                 !!parsedInitialSettings.ConfigOptions.DefaultToHover
@@ -1570,7 +1867,7 @@ export class WebRtcPlayerController {
         initialSettings.ueCompatible();
         Logger.Log(Logger.GetStackTrace(), payloadAsString, 6);
 
-        this.application.onInitialSettings(initialSettings);
+        this.pixelStreaming._onInitialSettings(initialSettings);
     }
 
     /**
@@ -1586,14 +1883,14 @@ export class WebRtcPlayerController {
         const AvgQP = Number(
             new TextDecoder('utf-16').decode(message.slice(1))
         );
-        this.application.onVideoEncoderAvgQP(AvgQP);
+        this.setVideoEncoderAvgQP(AvgQP);
     }
 
     /**
      * Handles when the video element has been loaded with a srcObject
      */
     handleVideoInitialized() {
-        this.application.onVideoInitialized();
+        this.pixelStreaming._onVideoInitialized();
 
         // either autoplay the video or set up the play overlay
         this.autoPlayVideoOrSetUpPlayOverlay();
@@ -1617,7 +1914,9 @@ export class WebRtcPlayerController {
             Logger.GetStackTrace(),
             `Received quality controller message, will control quality: ${this.isQualityController}`
         );
-        this.application.onQualityControlOwnership(this.isQualityController);
+        this.pixelStreaming._onQualityControlOwnership(
+            this.isQualityController
+        );
     }
 
     /**
@@ -1625,7 +1924,7 @@ export class WebRtcPlayerController {
      * @param stats - Aggregated Stats
      */
     handleVideoStats(stats: AggregatedStats) {
-        this.application.onVideoStats(stats);
+        this.pixelStreaming._onVideoStats(stats);
     }
 
     /**
@@ -1648,12 +1947,87 @@ export class WebRtcPlayerController {
     setDisconnectMessageOverride(message: string): void {
         this.disconnectMessageOverride = message;
     }
-	
-	setPreferredCodec(codec: string) {
-		this.preferredCodec = codec;
-		if(this.peerConnectionController) {
-			this.peerConnectionController.preferredCodec = codec;
-			this.peerConnectionController.updateCodecSelection = false;
-		}
-	}
+
+    setPreferredCodec(codec: string) {
+        this.preferredCodec = codec;
+        if (this.peerConnectionController) {
+            this.peerConnectionController.preferredCodec = codec;
+            this.peerConnectionController.updateCodecSelection = false;
+        }
+    }
+
+    setVideoEncoderAvgQP(avgQP: number) {
+        this.videoAvgQp = avgQP;
+        this.pixelStreaming._onVideoEncoderAvgQP(this.videoAvgQp);
+    }
+
+    /**
+     * enables/disables keyboard event listeners
+     */
+    setKeyboardInputEnabled(isEnabled: boolean) {
+        this.keyboardController?.unregisterKeyBoardEvents();
+        if (isEnabled) {
+            this.keyboardController = this.inputClassesFactory.registerKeyBoard(
+                this.config
+            );
+        }
+    }
+
+    /**
+     * enables/disables mouse event listeners
+     */
+    setMouseInputEnabled(isEnabled: boolean) {
+        this.mouseController?.unregisterMouseEvents();
+        if (isEnabled) {
+            const mouseMode = this.config.isFlagEnabled(Flags.HoveringMouseMode)
+            ? ControlSchemeType.HoveringMouse
+            : ControlSchemeType.LockedMouse;
+            this.mouseController =
+            this.inputClassesFactory.registerMouse(mouseMode);
+        }
+    }
+
+    /**
+     * enables/disables touch event listeners
+     */
+    setTouchInputEnabled(isEnabled: boolean) {
+        this.touchController?.unregisterTouchEvents();
+        if (isEnabled) {
+            this.touchController = this.inputClassesFactory.registerTouch(
+                this.config.isFlagEnabled(Flags.FakeMouseWithTouches),
+                this.videoElementParentClientRect
+            );
+        }
+    }
+
+    /**
+     * enables/disables game pad event listeners
+     */
+    setGamePadInputEnabled(isEnabled: boolean) {
+        this.gamePadController?.unregisterGamePadEvents();
+        if (isEnabled) {
+            this.gamePadController = this.inputClassesFactory.registerGamePad();
+            this.gamePadController.onGamepadConnected = () => {
+                this.streamMessageController.toStreamerHandlers.get('GamepadConnected')();
+            }
+            this.gamePadController.onGamepadDisconnected = (controllerIdx: number) => {
+                this.streamMessageController.toStreamerHandlers.get('GamepadDisconnected')([controllerIdx]);
+            }
+        }
+    }
+
+    registerDataChannelEventEmitters(dataChannel: DataChannelController) {
+        dataChannel.onOpen = (label, event) =>
+            this.pixelStreaming.dispatchEvent(
+                new DataChannelOpenEvent({ label, event })
+            );
+        dataChannel.onClose = (label, event) =>
+            this.pixelStreaming.dispatchEvent(
+                new DataChannelCloseEvent({ label, event })
+            );
+        dataChannel.onError = (label, event) =>
+            this.pixelStreaming.dispatchEvent(
+                new DataChannelErrorEvent({ label, event })
+            );
+    }
 }

@@ -2,14 +2,19 @@
 
 import { Logger } from '../Logger/Logger';
 import { StreamMessageController } from '../UeInstanceMessage/StreamMessageController';
+import { EventListenerTracker } from '../Util/EventListenerTracker';
+import { Controller } from './GamepadTypes';
 
 /**
  * The class that handles the functionality of gamepads and controllers
  */
 export class GamePadController {
-    controllers: Controller[];
+    controllers: Array<Controller>;
     requestAnimationFrame: (callback: FrameRequestCallback) => number;
     toStreamerMessagesProvider: StreamMessageController;
+
+    // Utility for keeping track of event handlers and unregistering them
+    private gamePadEventListenerTracker = new EventListenerTracker();
 
     /**
      * @param toStreamerMessagesProvider - Stream message instance
@@ -17,29 +22,60 @@ export class GamePadController {
     constructor(toStreamerMessagesProvider: StreamMessageController) {
         this.toStreamerMessagesProvider = toStreamerMessagesProvider;
 
-        this.requestAnimationFrame =
+        this.requestAnimationFrame = (
             window.mozRequestAnimationFrame ||
             window.webkitRequestAnimationFrame ||
-            window.requestAnimationFrame;
+            window.requestAnimationFrame
+        ).bind(window);
         const browserWindow = window as Window;
         if ('GamepadEvent' in browserWindow) {
-            window.addEventListener('gamepadconnected', (ev: GamepadEvent) =>
-                this.gamePadConnectHandler(ev)
+            const onGamePadConnected = (ev: GamepadEvent) =>
+                this.gamePadConnectHandler(ev);
+            const onGamePadDisconnected = (ev: GamepadEvent) =>
+                this.gamePadDisconnectHandler(ev);
+            window.addEventListener('gamepadconnected', onGamePadConnected);
+            window.addEventListener('gamepaddisconnected', onGamePadDisconnected);
+            this.gamePadEventListenerTracker.addUnregisterCallback(
+                () => window.removeEventListener('gamepadconnected', onGamePadConnected)
             );
-            window.addEventListener('gamepaddisconnected', (ev: GamepadEvent) =>
-                this.gamePadDisconnectHandler(ev)
+            this.gamePadEventListenerTracker.addUnregisterCallback(
+                () => window.removeEventListener('gamepaddisconnected', onGamePadDisconnected)
             );
         } else if ('WebKitGamepadEvent' in browserWindow) {
-            window.addEventListener(
-                'webkitgamepadconnected',
-                (ev: GamepadEvent) => this.gamePadConnectHandler(ev)
+            const onWebkitGamePadConnected = (ev: GamepadEvent) => this.gamePadConnectHandler(ev);
+            const onWebkitGamePadDisconnected = (ev: GamepadEvent) => this.gamePadDisconnectHandler(ev);
+            window.addEventListener('webkitgamepadconnected', onWebkitGamePadConnected);
+            window.addEventListener('webkitgamepaddisconnected', onWebkitGamePadDisconnected);
+            this.gamePadEventListenerTracker.addUnregisterCallback(
+                () => window.removeEventListener('webkitgamepadconnected', onWebkitGamePadConnected)
             );
-            window.addEventListener(
-                'webkitgamepaddisconnected',
-                (ev: GamepadEvent) => this.gamePadDisconnectHandler(ev)
+            this.gamePadEventListenerTracker.addUnregisterCallback(
+                () => window.removeEventListener('webkitgamepaddisconnected', onWebkitGamePadDisconnected)
             );
         }
         this.controllers = [];
+        if (navigator.getGamepads) {
+            for (const gamepad of navigator.getGamepads()) {
+                if (gamepad) {
+                    this.gamePadConnectHandler(new GamepadEvent('gamepadconnected', { gamepad }));
+                }
+            }
+        }
+    }
+
+    /**
+     * Unregisters all event handlers
+     */
+    unregisterGamePadEvents() {
+        this.gamePadEventListenerTracker.unregisterAll();
+        for(const controller of this.controllers) {
+            if(controller.id !== undefined) {
+                this.onGamepadDisconnected(controller.id);
+            }
+        }
+        this.controllers = [];
+        this.onGamepadConnected = () => { /* */ };
+        this.onGamepadDisconnected = () => { /* */ };
     }
 
     /**
@@ -52,7 +88,8 @@ export class GamePadController {
 
         const temp: Controller = {
             currentState: gamepad,
-            prevState: gamepad
+            prevState: gamepad,
+            id: undefined
         };
 
         this.controllers.push(temp);
@@ -64,6 +101,7 @@ export class GamePadController {
             6
         );
         window.requestAnimationFrame(() => this.updateStatus());
+        this.onGamepadConnected();
     }
 
     /**
@@ -77,10 +115,12 @@ export class GamePadController {
             'gamepad: ' + gamePadEvent.gamepad.id + ' disconnected',
             6
         );
+        const deletedController = this.controllers[gamePadEvent.gamepad.index];
         delete this.controllers[gamePadEvent.gamepad.index];
         this.controllers = this.controllers.filter(
             (controller) => controller !== undefined
         );
+        this.onGamepadDisconnected(deletedController.id);
     }
 
     /**
@@ -105,11 +145,12 @@ export class GamePadController {
     updateStatus() {
         this.scanGamePads();
         const toStreamerHandlers =
-            this.toStreamerMessagesProvider.getToStreamHandlersMap();
+            this.toStreamerMessagesProvider.toStreamerHandlers;
 
         // Iterate over multiple controllers in the case the multiple gamepads are connected
         for (const controller of this.controllers) {
-            const controllerIndex = this.controllers.indexOf(controller);
+            // If we haven't received an id (possible if using an older version of UE), return to original functionality
+            const controllerIndex = (controller.id === undefined) ? this.controllers.indexOf(controller) : controller.id;
             const currentState = controller.currentState;
             for (let i = 0; i < controller.currentState.buttons.length; i++) {
                 const currentButton = controller.currentState.buttons[i];
@@ -118,41 +159,46 @@ export class GamePadController {
                     // press
                     if (i == gamepadLayout.LeftTrigger) {
                         //                       UEs left analog has a button index of 5
-                        toStreamerHandlers.get('GamepadAnalog')(
-                            'GamepadAnalog',
-                            [controllerIndex, 5, currentButton.value]
-                        );
+                        toStreamerHandlers.get('GamepadAnalog')([
+                            controllerIndex,
+                            5,
+                            currentButton.value
+                        ]);
                     } else if (i == gamepadLayout.RightTrigger) {
                         //                       UEs right analog has a button index of 6
-                        toStreamerHandlers.get('GamepadAnalog')(
-                            'GamepadAnalog',
-                            [controllerIndex, 6, currentButton.value]
-                        );
+                        toStreamerHandlers.get('GamepadAnalog')([
+                            controllerIndex,
+                            6,
+                            currentButton.value
+                        ]);
                     } else {
-                        toStreamerHandlers.get('GamepadButtonPressed')(
-                            'GamepadButtonPressed',
-                            [controllerIndex, i, previousButton.pressed ? 1 : 0]
-                        );
+                        toStreamerHandlers.get('GamepadButtonPressed')([
+                            controllerIndex,
+                            i,
+                            previousButton.pressed ? 1 : 0
+                        ]);
                     }
                 } else if (!currentButton.pressed && previousButton.pressed) {
                     // release
                     if (i == gamepadLayout.LeftTrigger) {
                         //                       UEs left analog has a button index of 5
-                        toStreamerHandlers.get('GamepadAnalog')(
-                            'GamepadAnalog',
-                            [controllerIndex, 5, 0]
-                        );
+                        toStreamerHandlers.get('GamepadAnalog')([
+                            controllerIndex,
+                            5,
+                            0
+                        ]);
                     } else if (i == gamepadLayout.RightTrigger) {
                         //                       UEs right analog has a button index of 6
-                        toStreamerHandlers.get('GamepadAnalog')(
-                            'GamepadAnalog',
-                            [controllerIndex, 6, 0]
-                        );
+                        toStreamerHandlers.get('GamepadAnalog')([
+                            controllerIndex,
+                            6,
+                            0
+                        ]);
                     } else {
-                        toStreamerHandlers.get('GamepadButtonReleased')(
-                            'GamepadButtonReleased',
-                            [controllerIndex, i]
-                        );
+                        toStreamerHandlers.get('GamepadButtonReleased')([
+                            controllerIndex,
+                            i
+                        ]);
                     }
                 }
             }
@@ -166,12 +212,12 @@ export class GamePadController {
                 const y = -parseFloat(currentState.axes[i + 1].toFixed(4));
 
                 // UE's analog axes follow the same order as the browsers, but start at index 1 so we will offset as such
-                toStreamerHandlers.get('GamepadAnalog')('GamepadAnalog', [
+                toStreamerHandlers.get('GamepadAnalog')([
                     controllerIndex,
                     i + 1,
                     x
                 ]); // Horizontal axes, only offset by 1
-                toStreamerHandlers.get('GamepadAnalog')('GamepadAnalog', [
+                toStreamerHandlers.get('GamepadAnalog')([
                     controllerIndex,
                     i + 2,
                     y
@@ -179,9 +225,37 @@ export class GamePadController {
             }
             this.controllers[controllerIndex].prevState = currentState;
         }
-        this.requestAnimationFrame(() => this.updateStatus());
+        if (this.controllers.length > 0) {
+            this.requestAnimationFrame(() => this.updateStatus());
+        }
+    }
+
+    onGamepadResponseReceived(gamepadId: number) {
+        for(const controller of this.controllers) {
+            if(controller.id === undefined) {
+                controller.id = gamepadId;
+                break;
+            }
+        }
+    }
+
+    /**
+     * Event to send the gamepadconnected message to the application
+     */
+    onGamepadConnected() {
+        // Default Functionality: Do Nothing
+    }
+
+    /**
+     * Event to send the gamepaddisconnected message to the application
+     */
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    onGamepadDisconnected(controllerIdx: number) {
+        // Default Functionality: Do Nothing
     }
 }
+
+
 
 /**
  * Additional types for Window and Navigator
@@ -223,12 +297,4 @@ export enum gamepadLayout {
     LeftStickVertical = 1,
     RightStickHorizontal = 2,
     RightStickVertical = 3
-}
-
-/**
- * The interface for controllers
- */
-export interface Controller {
-    currentState: Gamepad;
-    prevState: Gamepad;
 }

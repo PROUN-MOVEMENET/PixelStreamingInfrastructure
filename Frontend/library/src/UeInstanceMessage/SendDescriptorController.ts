@@ -36,7 +36,7 @@ export class SendDescriptorController {
      * Send a Latency Test to the UE Instance
      * @param descriptor - the descriptor for a UI Interaction
      */
-    emitUIInteraction(descriptor: object) {
+    emitUIInteraction(descriptor: object | string) {
         this.sendDescriptor('UIInteraction', descriptor);
     }
 
@@ -45,11 +45,11 @@ export class SendDescriptorController {
      * @param messageType - UE Message Type
      * @param descriptor - Descriptor Message as JSON
      */
-    sendDescriptor(messageType: string, descriptor: object) {
+    sendDescriptor(messageType: string, descriptor: object | string) {
         // Convert the descriptor object into a JSON string.
         const descriptorAsString = JSON.stringify(descriptor);
         const toStreamerMessages =
-            this.toStreamerMessagesMapProvider.getToStreamerMessageMap();
+            this.toStreamerMessagesMapProvider.toStreamerMessages;
         const messageFormat = toStreamerMessages.getFromKey(messageType);
         if (messageFormat === undefined) {
             Logger.Error(

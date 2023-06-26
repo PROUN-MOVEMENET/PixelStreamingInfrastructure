@@ -44,30 +44,7 @@ async function onStreamerOffer(sdp) {
 }
 
 function getNextStreamerSCTPId() {
-  if(!streamer){
-    throw new TypeError('Cannot generate an SCTP stream id - streamer was null.');
-  }
-  if (!streamer.transport || !streamer.transport.sctpParameters || typeof streamer.transport.sctpParameters.MIS !== 'number') {
-    throw new TypeError('Streamer was not setup with the following require properties: streamer.transport.sctpParameters.MIS');
-  }
-  const numStreams = streamer.transport.sctpParameters.MIS;
-  if (!streamer.dataStreamIds){
-    streamer.dataStreamIds = Buffer.alloc(numStreams, 0);
-  }
-  if (!streamer.nextDataStreamId) {
-    streamer.nextDataStreamId = 0;
-  }
-
-  let sctpStreamId;
-  for (let idx = streamer.nextDataStreamId; idx < streamer.dataStreamIds.length; ++idx) {
-      sctpStreamId = idx % streamer.dataStreamIds.length;
-      if (!streamer.dataStreamIds[sctpStreamId]) {
-          streamer.nextDataStreamId = sctpStreamId + 1;
-          return sctpStreamId;
-      }
-  }
-  console.error("No available SCTP ids, they are all allocated.");
-  return -1;
+    return streamer.transport._getNextSctpStreamId();
 }
 
 function onStreamerDisconnected() {
@@ -156,6 +133,9 @@ async function setupPeerDataChannels(peerId) {
   // streamer data consumer (consumes peer data)
   peer.streamerDataConsumer = await streamer.transport.consumeData({ dataProducerId: peer.peerDataProducer.id });
 
+  streamer.transport._sctpStreamIds[nextStreamerSCTPStreamId] = 1;
+  streamer.transport._sctpStreamIds[nextPeerSCTPStreamId] = 1;
+
   const peerSignal = {
     type: 'peerDataChannels',
     playerId: peerId,
@@ -217,11 +197,11 @@ function onPeerDisconnected(peerId) {
     }
     if(peer.streamerDataConsumer){
       // Set the streamer sctp id we generated back to zero indicating it can be reused.
-      if(streamer && streamer.dataStreamIds){
+      if(streamer && streamer.transport && streamer.transport._sctpStreamIds){
         const allocatedStreamId = peer.streamerDataProducer.sctpStreamParameters.streamId;
         const allocatedPeerStreamId = peer.peerDataProducer.sctpStreamParameters.streamId;
-        streamer.dataStreamIds[allocatedStreamId] = 0;
-        streamer.dataStreamIds[allocatedPeerStreamId] = 0;
+        streamer.transport._sctpStreamIds[allocatedStreamId] = 0;
+        streamer.transport._sctpStreamIds[allocatedPeerStreamId] = 0;
       }
       peer.streamerDataConsumer.close();
       peer.streamerDataProducer.close();
@@ -238,8 +218,17 @@ function disconnectAllPeers() {
   }
 }
 
+function onLayerPreference(msg) {
+  const peer = peers.get(`${msg.playerId}`);
+  if (peer != null) {
+    for (consumer of peer.consumers) {
+      consumer.setPreferredLayers({ spatialLayer: msg.spatialLayer, temporalLayer: msg.temporalLayer });
+    }
+  }
+}
+
 async function onSignallingMessage(message) {
-	//console.log(`Got MSG: ${message}`);
+    //console.log(`Got MSG: ${message}`);
   const msg = JSON.parse(message);
 
   if (msg.type == 'offer') {
@@ -263,9 +252,9 @@ async function onSignallingMessage(message) {
   else if (msg.type == 'peerDataChannelsReady') {
     setupStreamerDataChannelsForPeer(msg.playerId);
   }
-  // todo a new message type for force layer switch (for debugging)
-  // see: https://mediasoup.org/documentation/v3/mediasoup/api/#consumer-setPreferredLayers
-  // preferredLayers for debugging to select a particular simulcast layer, looks like { spatialLayer: 2, temporalLayer: 0 }
+  else if (msg.type == 'layerPreference') {
+    onLayerPreference(msg);
+  }
 }
 
 async function startMediasoup() {

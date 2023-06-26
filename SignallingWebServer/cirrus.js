@@ -18,6 +18,8 @@ const defaultConfig = {
 	UseFrontend: false,
 	UseMatchmaker: false,
 	UseHTTPS: false,
+	HTTPSCertFile: './certificates/client-cert.pem',
+	HTTPSKeyFile: './certificates/client-key.pem',
 	UseAuthentication: false,
 	LogToFile: true,
 	LogVerbose: true,
@@ -31,7 +33,8 @@ const defaultConfig = {
 	HttpsPort: 443,
 	StreamerPort: 8888,
 	SFUPort: 8889,
-	MaxPlayerCount: -1
+	MaxPlayerCount: -1,
+	DisableSSLCert: true
 };
 
 const argv = require('yargs').argv;
@@ -50,8 +53,8 @@ var http = require('http').Server(app);
 if (config.UseHTTPS) {
 	//HTTPS certificate details
 	const options = {
-		key: fs.readFileSync(path.join(__dirname, './certificates/client-key.pem')),
-		cert: fs.readFileSync(path.join(__dirname, './certificates/client-cert.pem'))
+		key: fs.readFileSync(path.join(__dirname, config.HTTPSKeyFile)),
+		cert: fs.readFileSync(path.join(__dirname, config.HTTPSCertFile))
 	};
 
 	var https = require('https').Server(options, app);
@@ -78,8 +81,11 @@ if (config.UseFrontend) {
 	var httpPort = 3000;
 	var httpsPort = 8000;
 
-	//Required for self signed certs otherwise just get an error back when sending request to frontend see https://stackoverflow.com/a/35633993
-	process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+	if (config.UseHTTPS && config.DisableSSLCert) {
+		//Required for self signed certs otherwise just get an error back when sending request to frontend see https://stackoverflow.com/a/35633993
+		console.logColor(logging.Orange, 'WARNING: config.DisableSSLCert is true. Unauthorized SSL certificates will be allowed! This is convenient for local testing but please DO NOT SHIP THIS IN PRODUCTION. To remove this warning please set DisableSSLCert to false in your config.json.');
+		process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+	}
 
 	const httpsClient = require('./modules/httpsClient.js');
 	var webRequest = new httpsClient();
@@ -189,6 +195,16 @@ if (config.UseHTTPS) {
 
 sendGameSessionData();
 
+// set up rate limiter: maximum of five requests per minute
+var RateLimit = require('express-rate-limit');
+var limiter = RateLimit({
+  windowMs: 1*60*1000, // 1 minute
+  max: 60
+});
+
+// apply rate limiter to all requests
+app.use(limiter);
+
 //Setup the login page if we are using authentication
 if(config.UseAuthentication){
 	if(config.EnableWebserver) {
@@ -268,17 +284,18 @@ if (config.UseHTTPS) {
 	});
 }
 
-console.logColor(logging.Cyan, `Running Cirrus - The Pixel Streaming reference implementation signalling server for Unreal Engine 5.1.`);
+console.logColor(logging.Cyan, `Running Cirrus - The Pixel Streaming reference implementation signalling server for Unreal Engine 5.2.`);
 
 let nextPlayerId = 1;
 
 const PlayerType = { Regular: 0, SFU: 1 };
 
 class Player {
-	constructor(id, ws, type) {
+	constructor(id, ws, type, browserSendOffer) {
 		this.id = id;
 		this.ws = ws;
 		this.type = type;
+		this.browserSendOffer = browserSendOffer;
 	}
 
 	subscribe(streamerId) {
@@ -287,7 +304,7 @@ class Player {
 			return;
 		}
 		this.streamerId = streamerId;
-		const msg = { type: 'playerConnected', playerId: this.id, dataChannel: true, sfu: this.type == PlayerType.SFU };
+		const msg = { type: 'playerConnected', playerId: this.id, dataChannel: true, sfu: this.type == PlayerType.SFU, sendOffer: !this.browserSendOffer };
 		logOutgoing(this.streamerId, msg);
 		this.sendFrom(msg);
 	}
@@ -303,10 +320,20 @@ class Player {
 
 	sendFrom(message) {
 		if (!this.streamerId) {
-			return;
+			if(streamers.size > 0) {
+				this.streamerId = streamers.entries().next().value[0];
+				console.logColor(logging.Orange, `Player ${this.id} attempted to send an outgoing message without having subscribed first. Defaulting to ${this.streamerId}`);
+			} else {
+				console.logColor(logging.Orange, `Player ${this.id} attempted to send an outgoing message without having subscribed first. No streamer connected so this message isn't going anywhere!`)
+				return;
+			}
 		}
 
-		message.playerId = this.id;
+		// normally we want to indicate what player this message came from
+		// but in some instances we might already have set this (streamerDataChannels) due to poor choices
+		if (!message.playerId) {
+			message.playerId = this.id;
+		}
 		const msgString = JSON.stringify(message);
 
 		let streamer = streamers.get(this.streamerId);
@@ -353,14 +380,13 @@ function logOutgoing(destName, msg) {
 
 function logForward(srcName, destName, msg) {
 	if (config.LogVerbose)
-		console.logColor(logging.Green, "\x1b[37m%s -> %s\x1b[32m %s", srcName, destName, JSON.stringify(msg));
+		console.logColor(logging.Cyan, "\x1b[37m%s -> %s\x1b[36m %s", srcName, destName, JSON.stringify(msg));
 	else
-		console.logColor(logging.Green, "\x1b[37m%s -> %s\x1b[32m %s", srcName, destName, msg.type);
+		console.logColor(logging.Cyan, "\x1b[37m%s -> %s\x1b[36m %s", srcName, destName, msg.type);
 }
 
 let WebSocket = require('ws');
 
-let streamerMessageHandlers = new Map();
 let sfuMessageHandlers = new Map();
 let playerMessageHandlers = new Map();
 
@@ -434,21 +460,34 @@ function onStreamerMessageDisconnectPlayer(streamer, msg) {
 	}
 }
 
+function onStreamerMessageLayerPreference(streamer, msg) {
+	let sfuPlayer = getSFU();
+	if (sfuPlayer) {
+		logOutgoing(sfuPlayer.id, msg);
+		sfuPlayer.sendTo(msg);
+	}
+}
+
 function forwardStreamerMessageToPlayer(streamer, msg) {
 	const playerId = getPlayerIdFromMessage(msg);
 	const player = players.get(playerId);
 	if (player) {
+		delete msg.playerId;
 		logForward(streamer.id, playerId, msg);
 		player.sendTo(msg);
+	} else {
+		console.warning("No playerId specified, cannot forward message: %s", msg);
 	}
 }
 
+let streamerMessageHandlers = new Map();
 streamerMessageHandlers.set('endpointId', onStreamerMessageId);
 streamerMessageHandlers.set('ping', onStreamerMessagePing);
 streamerMessageHandlers.set('offer', forwardStreamerMessageToPlayer);
 streamerMessageHandlers.set('answer', forwardStreamerMessageToPlayer);
 streamerMessageHandlers.set('iceCandidate', forwardStreamerMessageToPlayer);
 streamerMessageHandlers.set('disconnectPlayer', onStreamerMessageDisconnectPlayer);
+streamerMessageHandlers.set('layerPreference', onStreamerMessageLayerPreference);
 
 console.logColor(logging.Green, `WebSocket listening for Streamer connections on :${streamerPort}`)
 let streamerServer = new WebSocket.Server({ port: streamerPort, backlog: 1 });
@@ -469,7 +508,7 @@ streamerServer.on('connection', function (ws, req) {
 		}
 
 		let handler = streamerMessageHandlers.get(msg.type);
-		if (!handler) {
+		if (!handler || (typeof handler != 'function')) {
 			if (config.LogVerbose) {
 				console.logColor(logging.White, "\x1b[37m-> %s\x1b[34m: %s", streamer.id, msgRaw);
 			}
@@ -518,6 +557,7 @@ function forwardSFUMessageToStreamer(msg) {
 	const sfuPlayer = getSFU();
 	if (sfuPlayer) {
 		logForward(SFUPlayerId, sfuPlayer.streamerId, msg);
+		msg.sfuId = SFUPlayerId;
 		sfuPlayer.sendFrom(msg);
 	}
 }
@@ -538,7 +578,7 @@ function onSFUDisconnected() {
 	disconnectAllPlayers(SFUPlayerId);
 	const sfuPlayer = getSFU();
 	if (sfuPlayer) {
-		sfuPlayer.subscribe();
+		sfuPlayer.unsubscribe();
 		sfuPlayer.ws.close(4000, "SFU Disconnected");
 	}
 	players.delete(SFUPlayerId);
@@ -570,7 +610,7 @@ sfuServer.on('connection', function (ws, req) {
 		}
 
 		let handler = sfuMessageHandlers.get(msg.type);
-		if (!handler) {
+		if (!handler || (typeof handler != 'function')) {
 			if (config.LogVerbose) {
 				console.logColor(logging.White, "\x1b[37m-> %s\x1b[34m: %s", SFUPlayerId, msgRaw);
 			}
@@ -596,7 +636,7 @@ sfuServer.on('connection', function (ws, req) {
 		}
 	});
 
-	let sfuPlayer = new Player(SFUPlayerId, ws, PlayerType.SFU);
+	let sfuPlayer = new Player(SFUPlayerId, ws, PlayerType.SFU, false);
 	players.set(SFUPlayerId, sfuPlayer);
 	console.logColor(logging.Green, `SFU (${req.connection.remoteAddress}) connected `);
 
@@ -678,6 +718,7 @@ playerServer.on('connection', function (ws, req) {
 	var url = require('url');
 	const parsedUrl = url.parse(req.url);
 	const urlParams = new URLSearchParams(parsedUrl.search);
+	const browserSendOffer = urlParams.has('OfferToReceive') && urlParams.get('OfferToReceive') !== 'false';
 
 	if (playerCount + 1 > maxPlayerCount && maxPlayerCount !== -1)
 	{
@@ -689,7 +730,7 @@ playerServer.on('connection', function (ws, req) {
 	++playerCount;
 	let playerId = sanitizePlayerId(nextPlayerId++);
 	console.logColor(logging.Green, `player ${playerId} (${req.connection.remoteAddress}) connected`);
-	let player = new Player(playerId, ws, PlayerType.Regular);
+	let player = new Player(playerId, ws, PlayerType.Regular, browserSendOffer);
 	players.set(playerId, player);
 
 	ws.on('message', (msgRaw) =>{
@@ -710,7 +751,7 @@ playerServer.on('connection', function (ws, req) {
 		}
 
 		let handler = playerMessageHandlers.get(msg.type);
-		if (!handler) {
+		if (!handler || (typeof handler != 'function')) {
 			if (config.LogVerbose) {
 				console.logColor(logging.White, "\x1b[37m-> %s\x1b[34m: %s", playerId, msgRaw);
 			}
@@ -744,14 +785,6 @@ playerServer.on('connection', function (ws, req) {
 	
 	player.ws.send(JSON.stringify(clientConfig));
 	sendPlayersCount();
-
-	// if we only have one streamer just subscribe this player to that one
-	if (streamers.size == 1) {
-		for (let [streamerId, streamer] of streamers) {
-			player.subscribe(streamerId);
-			break;
-		}
-	}
 });
 
 function disconnectAllPlayers(streamerId) {
@@ -794,7 +827,7 @@ if (config.UseMatchmaker) {
 		message = {
 			type: 'connect',
 			address: typeof serverPublicIp === 'undefined' ? '127.0.0.1' : serverPublicIp,
-			port: httpPort,
+			port: config.UseHTTPS ? httpsPort : httpPort,
 			ready: streamers.size > 0,
 			playerConnected: playerConnected
 		};

@@ -5,6 +5,7 @@ import { Logger } from '../Logger/Logger';
 import { ActiveKeys } from './InputClassesFactory';
 import { StreamMessageController } from '../UeInstanceMessage/StreamMessageController';
 import { Config, Flags } from '../Config/Config';
+import { EventListenerTracker } from '../Util/EventListenerTracker';
 
 interface ICodeToKeyCode {
     [key: string]: number;
@@ -17,6 +18,9 @@ export class KeyboardController {
     toStreamerMessagesProvider: StreamMessageController;
     activeKeysProvider: ActiveKeys;
     config: Config;
+
+    // Utility for keeping track of event handlers and unregistering them
+    private keyboardEventListenerTracker = new EventListenerTracker();
 
     /*
      * New browser APIs have moved away from KeyboardEvent.keyCode to KeyboardEvent.Code.
@@ -146,11 +150,32 @@ export class KeyboardController {
      * Registers document keyboard events with the controller
      */
     registerKeyBoardEvents() {
-        document.onkeydown = (ev: KeyboardEvent) => this.handleOnKeyDown(ev);
-        document.onkeyup = (ev: KeyboardEvent) => this.handleOnKeyUp(ev);
+        const keyDownHandler = (ev: KeyboardEvent) => this.handleOnKeyDown(ev);
+        const keyUpHandler = (ev: KeyboardEvent) => this.handleOnKeyUp(ev);
+        const keyPressHandler = (ev: KeyboardEvent) => this.handleOnKeyPress(ev);
+
+        document.addEventListener("keydown", keyDownHandler);
+        document.addEventListener("keyup", keyUpHandler);
 
         //This has been deprecated as at Jun 13 2021
-        document.onkeypress = (ev: KeyboardEvent) => this.handleOnKeyPress(ev);
+        document.addEventListener("keypress", keyPressHandler);
+
+        this.keyboardEventListenerTracker.addUnregisterCallback(
+            () => document.removeEventListener("keydown", keyDownHandler)
+        );
+        this.keyboardEventListenerTracker.addUnregisterCallback(
+            () => document.removeEventListener("keyup", keyUpHandler)
+        );
+        this.keyboardEventListenerTracker.addUnregisterCallback(
+            () => document.removeEventListener("keypress", keyPressHandler)
+        );
+    }
+
+    /**
+     * Unregisters document keyboard events
+     */
+    unregisterKeyBoardEvents() {
+        this.keyboardEventListenerTracker.unregisterAll();
     }
 
     /**
@@ -169,8 +194,8 @@ export class KeyboardController {
             6
         );
         const toStreamerHandlers =
-            this.toStreamerMessagesProvider.getToStreamHandlersMap();
-        toStreamerHandlers.get('KeyDown')('KeyDown', [
+            this.toStreamerMessagesProvider.toStreamerHandlers;
+        toStreamerHandlers.get('KeyDown')([
             this.getKeycode(keyboardEvent),
             keyboardEvent.repeat ? 1 : 0
         ]);
@@ -206,8 +231,8 @@ export class KeyboardController {
 
         Logger.Log(Logger.GetStackTrace(), `key up ${keyCode}`, 6);
         const toStreamerHandlers =
-            this.toStreamerMessagesProvider.getToStreamHandlersMap();
-        toStreamerHandlers.get('KeyUp')('KeyUp', [
+            this.toStreamerMessagesProvider.toStreamerHandlers;
+        toStreamerHandlers.get('KeyUp')([
             keyCode,
             keyboardEvent.repeat ? 1 : 0
         ]);
@@ -237,8 +262,8 @@ export class KeyboardController {
         Logger.Log(Logger.GetStackTrace(), `key press ${charCode}`, 6);
 
         const toStreamerHandlers =
-            this.toStreamerMessagesProvider.getToStreamHandlersMap();
-        toStreamerHandlers.get('KeyPress')('KeyPress', [charCode]);
+            this.toStreamerMessagesProvider.toStreamerHandlers;
+        toStreamerHandlers.get('KeyPress')([charCode]);
     }
 
     /**
