@@ -21,12 +21,28 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      -
-        name: Build and push the Signalling Server container image for Unreal Engine based on our development branch
+          password: ${{ secrets.GHCR }}
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/proun-movemenet/${{ env.IMAGE_NAME }}
+      - name: Build and push the Signalling Server container image for Unreal Engine based on our development branch
         uses: docker/build-push-action@v3
         with:
-          context: .
-          tags: 'ghcr.io/epicgames/pixel-streaming-signalling-server:5.2'
+          context: ./SignallingWebServer
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           push: true
-          file: SignallingWebServer/Dockerfile
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta_matchmaker
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/proun-movemenet/matchmaker
+      - name: Build and push the Mathcmaker container image for Unreal Engine 5.1
+        uses: docker/build-push-action@v3
+        with:
+          context: ./Matchmaker
+          tags: ${{ steps.meta_matchmaker.outputs.tags }}
+          labels: ${{ steps.meta_matchmaker.outputs.labels }}
+          push: true
